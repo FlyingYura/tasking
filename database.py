@@ -24,7 +24,6 @@ def create_group_table(cursor, group_name, study_year, curator):
     
     init_core_registry(cursor)
 
-    # Реєструємо або оновлюємо метадані групи
     cursor.execute("""
         INSERT INTO groups_registry (group_name, table_name, study_year, curator)
         VALUES (%s, %s, %s, %s)
@@ -32,7 +31,6 @@ def create_group_table(cursor, group_name, study_year, curator):
         SET study_year = EXCLUDED.study_year, curator = EXCLUDED.curator;
     """, (group_name, table_name, study_year, curator))
 
-    # Створюємо індивідуальну таблицю групи
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             id SERIAL PRIMARY KEY,
@@ -46,7 +44,6 @@ def create_group_table(cursor, group_name, study_year, curator):
     return table_name
 
 def insert_student(cursor, table_name, full_name, group_name, funding, curator, note):
-    """Додає студента у таблицю відповідної групи."""
     cursor.execute(f"""
         INSERT INTO {table_name} (full_name, group_name, funding, curator, note)
         VALUES (%s, %s, %s, %s, %s)
@@ -55,7 +52,6 @@ def insert_student(cursor, table_name, full_name, group_name, funding, curator, 
     return cursor.fetchone()[0]
 
 def update_student(cursor, table_name, student_id, full_name, funding, note):
-    """Оновлює дані студента."""
     cursor.execute(f"""
         UPDATE {table_name}
         SET full_name = %s, funding = %s, note = %s
@@ -63,16 +59,22 @@ def update_student(cursor, table_name, student_id, full_name, funding, note):
     """, (full_name, funding, note, student_id))
 
 def delete_student(cursor, table_name, student_id):
-    """Видаляє студента за ID."""
     cursor.execute(f"DELETE FROM {table_name} WHERE id = %s;", (student_id,))
 
 def get_all_registered_groups(cursor):
-    """Повертає список зареєстрованих груп."""
     init_core_registry(cursor)
     cursor.execute("SELECT group_name, table_name, study_year, curator FROM groups_registry ORDER BY group_name;")
     return cursor.fetchall()
 
 def get_students_from_group(cursor, table_name):
-    """Отримує всіх студентів певної групи."""
-    cursor.execute(f"SELECT id, full_name, group_name, funding, curator, note FROM {table_name} ORDER BY id;")
+    cursor.execute(f"SELECT id, full_name, funding, note FROM {table_name} ORDER BY id;")
     return cursor.fetchall()
+
+def clear_entire_database(cursor):
+    """Повністю видаляє всі таблиці груп та очищає реєстр."""
+    init_core_registry(cursor)
+    cursor.execute("SELECT table_name FROM groups_registry;")
+    tables = cursor.fetchall()
+    for t in tables:
+        cursor.execute(f"DROP TABLE IF EXISTS {t[0]} CASCADE;")
+    cursor.execute("TRUNCATE TABLE groups_registry RESTART IDENTITY CASCADE;")
