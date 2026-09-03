@@ -66,7 +66,7 @@ def parse_reward_order(file_path):
         if not line_clean:
             continue
 
-        # Формат: "ВАЙДІ Юліані – група ДЗ-21"
+        # 1. Шукаємо рядки виду: "ВАЙДІ Юліані – група ДЗ-21"
         matches_with_group = re.findall(r'([А-ЯІЇЄҐ][а-яіїєґ]+\s+[А-ЯІЇЄҐ][а-яіїєґ]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ]+)?)\s*[\–\-]\s*група\s*([А-ЯІЇЄҐA-Z]{2,4}\s*[-–]\s*\d{2})', line_clean, re.IGNORECASE)
         for m in matches_with_group:
             name = m[0].strip()
@@ -74,12 +74,13 @@ def parse_reward_order(file_path):
             if not any(s['full_name'].lower() == name.lower() and s['group_name'] == grp for s in students):
                 students.append({"full_name": name, "group_name": grp})
 
-        # Колонки імен (як у наказі №271 без явного зазначення групи в тому ж рядку)
-        cols = re.split(r'\t{1,}| {3,}', line_clean)
+        # 2. Розбиваємо рядки на колонки (для списків типу Івану БОЙЧУКУ / Назару ТКАЧУ)
+        cols = re.split(r'\t{1,}| {2,}', line_clean)
         for col in cols:
             col = col.strip()
+            # Шукаємо імена з двох слів у давальному/інших відмінках
             if re.match(r'^[А-ЯІЇЄҐ][а-яіїєґ]+\s+[А-ЯІЇЄҐ][а-яіїєґ]+$', col):
-                if not any(w in col.lower() for w in ["директор", "заступник", "коледж", "наказ", "призначаю"]):
+                if not any(w in col.lower() for w in ["директор", "заступник", "коледж", "наказ", "призначаю", "викладач", "подяку"]):
                     if not any(s['full_name'].lower() == col.lower() for s in students):
                         students.append({"full_name": col, "group_name": None})
 

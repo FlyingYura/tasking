@@ -6,7 +6,6 @@ def sanitize_table_name(group_name):
     return f"group_{clean}"
 
 def init_core_registry(cursor):
-    """Створює реєстр груп та таблиці для нагороджень."""
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS groups_registry (
             id SERIAL PRIMARY KEY,
@@ -17,7 +16,6 @@ def init_core_registry(cursor):
         );
     """)
 
-    # Таблиця наказів про нагородження
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS rewards_orders (
             id SERIAL PRIMARY KEY,
@@ -30,7 +28,6 @@ def init_core_registry(cursor):
         );
     """)
 
-    # Таблиця зв'язку студента з групи з наказом про нагородження
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS student_achievements (
             id SERIAL PRIMARY KEY,
@@ -90,6 +87,24 @@ def get_all_registered_groups(cursor):
 def get_students_from_group(cursor, table_name):
     cursor.execute(f"SELECT id, full_name, funding, note FROM {table_name} ORDER BY id;")
     return cursor.fetchall()
+
+def get_all_students_flat(cursor):
+    init_core_registry(cursor)
+    cursor.execute("SELECT table_name, group_name FROM groups_registry;")
+    groups = cursor.fetchall()
+    
+    all_students = []
+    for tbl, grp in groups:
+        cursor.execute(f"SELECT id, full_name, group_name FROM {tbl};")
+        rows = cursor.fetchall()
+        for r in rows:
+            all_students.append({"table": tbl, "id": r[0], "full_name": r[1], "group_name": r[2]})
+    return all_students
+
+def clear_rewards_and_ratings(cursor):
+    """Очищає лише накази про нагородження та нараховані бали студентів, залишаючи самі групи незмінними."""
+    init_core_registry(cursor)
+    cursor.execute("TRUNCATE TABLE student_achievements, rewards_orders RESTART IDENTITY CASCADE;")
 
 def clear_entire_database(cursor):
     init_core_registry(cursor)
