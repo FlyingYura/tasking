@@ -1,289 +1,331 @@
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 import customtkinter as ctk
 import psycopg2
 
-from database import init_database
-from parser import parse_order_file
+import database
+from table_parser import parse_students_tables
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
-class OrderAutomationApp(ctk.CTk):
+class StudentManagementApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("Автоматизація роботи з документацією заступника директора")
-        self.geometry("950x720")
-        self.minsize(850, 600)
+        self.title("Автоматизація документообігу — Керування групами та студентами")
+        self.geometry("1100x750")
+        self.minsize(950, 650)
 
-        self.file_path = None
-        self.parsed_data = None
+        self.loaded_data = None
+        self.selected_group_table = None
 
-        self.create_widgets()
+        self.create_widgets()  
 
     def create_widgets(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
+        # Панель підключення до PostgreSQL
         db_frame = ctk.CTkFrame(self)
-        db_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
-        db_frame.grid_columnconfigure(9, weight=1)
+        db_frame.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
 
-        ctk.CTkLabel(db_frame, text="Хост:").grid(row=0, column=0, padx=5, pady=10, sticky="w")
+        ctk.CTkLabel(db_frame, text="Хост:").grid(row=0, column=0, padx=4, pady=8)
         self.host_entry = ctk.CTkEntry(db_frame, width=80)
         self.host_entry.insert(0, "localhost")
-        self.host_entry.grid(row=0, column=1, padx=5, pady=10)
+        self.host_entry.grid(row=0, column=1, padx=4, pady=8)
 
-        ctk.CTkLabel(db_frame, text="Порт:").grid(row=0, column=2, padx=5, pady=10, sticky="w")
+        ctk.CTkLabel(db_frame, text="Порт:").grid(row=0, column=2, padx=4, pady=8)
         self.port_entry = ctk.CTkEntry(db_frame, width=50)
         self.port_entry.insert(0, "5432")
-        self.port_entry.grid(row=0, column=3, padx=5, pady=10)
+        self.port_entry.grid(row=0, column=3, padx=4, pady=8)
 
-        ctk.CTkLabel(db_frame, text="БД:").grid(row=0, column=4, padx=5, pady=10, sticky="w")
+        ctk.CTkLabel(db_frame, text="БД:").grid(row=0, column=4, padx=4, pady=8)
         self.dbname_entry = ctk.CTkEntry(db_frame, width=80)
         self.dbname_entry.insert(0, "college_db")
-        self.dbname_entry.grid(row=0, column=5, padx=5, pady=10)
+        self.dbname_entry.grid(row=0, column=5, padx=4, pady=8)
 
-        ctk.CTkLabel(db_frame, text="Користувач:").grid(row=0, column=6, padx=5, pady=10, sticky="w")
+        ctk.CTkLabel(db_frame, text="Користувач:").grid(row=0, column=6, padx=4, pady=8)
         self.user_entry = ctk.CTkEntry(db_frame, width=80)
         self.user_entry.insert(0, "postgres")
-        self.user_entry.grid(row=0, column=7, padx=5, pady=10)
+        self.user_entry.grid(row=0, column=7, padx=4, pady=8)
 
-        ctk.CTkLabel(db_frame, text="Пароль:").grid(row=0, column=8, padx=5, pady=10, sticky="w")
+        ctk.CTkLabel(db_frame, text="Пароль:").grid(row=0, column=8, padx=4, pady=8)
         self.pass_entry = ctk.CTkEntry(db_frame, width=80, show="*")
-        self.pass_entry.grid(row=0, column=9, padx=5, pady=10)
+        self.pass_entry.grid(row=0, column=9, padx=4, pady=8)
 
-        connect_btn = ctk.CTkButton(db_frame, text="Підключення", fg_color="#2b8a3e", hover_color="#237032", width=110, command=self.setup_db_connection)
-        connect_btn.grid(row=0, column=10, padx=5, pady=10)
+        connect_btn = ctk.CTkButton(db_frame, text="Підключитися", fg_color="#2b8a3e", width=100, command=self.test_connection)
+        connect_btn.grid(row=0, column=10, padx=6, pady=8)
 
-        clear_db_btn = ctk.CTkButton(db_frame, text="Очистити БД", fg_color="#c92a2a", hover_color="#a61e1e", width=100, command=self.clear_database)
-        clear_db_btn.grid(row=0, column=11, padx=5, pady=10)
-
+        # Вкладки
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
+        self.tabview.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="nsew")
 
-        self.tab_upload = self.tabview.add("Обробка Наказу")
-        self.tab_rating = self.tabview.add("Рейтинг студентів")
+        self.tab_import = self.tabview.add("Імпорт списків з Word")
+        self.tab_crud = self.tabview.add("Керування студентами (CRUD)")
 
-        self.setup_upload_tab()
-        self.setup_rating_tab()
+        self.setup_import_tab()
+        self.setup_crud_tab()
 
-    def get_db_config(self):
-        return {
-            "host": self.host_entry.get().strip(),
-            "port": self.port_entry.get().strip(),
-            "database": self.dbname_entry.get().strip(),
-            "user": self.user_entry.get().strip(),
-            "password": self.pass_entry.get().strip()
-        }
+    def get_db_connection(self):
+        return psycopg2.connect(
+            host=self.host_entry.get().strip(),
+            port=self.port_entry.get().strip(),
+            database=self.dbname_entry.get().strip(),
+            user=self.user_entry.get().strip(),
+            password=self.pass_entry.get().strip()
+        )
 
-    def setup_db_connection(self):
-        config = self.get_db_config()
+    def test_connection(self):
         try:
-            init_database(config)
-            messagebox.showinfo("Успіх", "Підключення до PostgreSQL та ініціалізація таблиць пройшли успішно!")
-            self.load_ratings()
-        except Exception as e:
-            messagebox.showerror("Помилка", f"Не вдалося підключитися до бази даних:\n{e}")
-
-    def clear_database(self):
-        if not messagebox.askyesno("Підтвердження", "Ви впевнені, що хочете видалити всі дані з бази даних?"):
-            return
-
-        config = self.get_db_config()
-        try:
-            conn = psycopg2.connect(**config)
+            conn = self.get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("TRUNCATE TABLE achievements, orders, students RESTART IDENTITY CASCADE;")
+            database.init_core_registry(cursor)
             conn.commit()
             cursor.close()
             conn.close()
-            messagebox.showinfo("Успіх", "Базу даних повністю очищено!")
-            self.load_ratings()
+            messagebox.showinfo("Успіх", "Підключення до БД успішне!")
+            self.refresh_groups_dropdown()
         except Exception as e:
-            messagebox.showerror("Помилка", f"Не вдалося очистити базу даних:\n{e}")
+            messagebox.showerror("Помилка БД", f"Не вдалося підключитися:\n{e}")
 
-    def setup_upload_tab(self):
-        self.tab_upload.grid_columnconfigure(0, weight=1)
-        self.tab_upload.grid_rowconfigure(2, weight=1)
+    # --- ВКЛАДКА 1: ІМПОРТ З WORD ---
+    def setup_import_tab(self):
+        self.tab_import.grid_columnconfigure(0, weight=1)
+        self.tab_import.grid_rowconfigure(1, weight=1)
 
-        file_frame = ctk.CTkFrame(self.tab_upload, fg_color="transparent")
-        file_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        top_panel = ctk.CTkFrame(self.tab_import, fg_color="transparent")
+        top_panel.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-        self.file_label = ctk.CTkLabel(file_frame, text="Файл наказу не вибрано", font=("Arial", 14))
-        self.file_label.pack(side="left", padx=5)
+        select_btn = ctk.CTkButton(top_panel, text="Вибрати файл зі списками (.doc / .docx)", command=self.browse_student_file)
+        select_btn.pack(side="left", padx=5)
 
-        select_btn = ctk.CTkButton(file_frame, text="Вибрати файл наказу (.doc / .docx)", command=self.browse_file)
-        select_btn.pack(side="right", padx=5)
+        self.lbl_import_status = ctk.CTkLabel(top_panel, text="Оберіть файл для розпізнавання груп")
+        self.lbl_import_status.pack(side="left", padx=15)
 
-        self.info_frame = ctk.CTkFrame(self.tab_upload)
-        self.info_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
-        self.info_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        self.save_import_btn = ctk.CTkButton(top_panel, text="Створити таблиці та зберегти в БД", fg_color="#1864ab", state="disabled", command=self.save_parsed_to_db)
+        self.save_import_btn.pack(side="right", padx=5)
 
-        self.lbl_num = ctk.CTkLabel(self.info_frame, text="Номер наказу: —")
-        self.lbl_num.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        self.import_textbox = ctk.CTkTextbox(self.tab_import, font=("Consolas", 12))
+        self.import_textbox.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
 
-        self.lbl_date = ctk.CTkLabel(self.info_frame, text="Дата: —")
-        self.lbl_date.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+    def browse_student_file(self):
+        path = filedialog.askopenfilename(filetypes=[("Word Documents", "*.docx;*.doc"), ("All Files", "*.*")])
+        if not path:
+            return
 
-        self.lbl_level = ctk.CTkLabel(self.info_frame, text="Рівень заходу: —")
-        self.lbl_level.grid(row=0, column=2, padx=10, pady=10, sticky="w")
+        self.lbl_import_status.configure(text=f"Файл: {os.path.basename(path)}")
+        try:
+            self.loaded_data = parse_students_tables(path)
+            self.import_textbox.delete("0.0", "end")
 
-        self.lbl_points = ctk.CTkLabel(self.info_frame, text="Бали: —")
-        self.lbl_points.grid(row=0, column=3, padx=10, pady=10, sticky="w")
+            total_students = sum(len(g["students"]) for g in self.loaded_data.values())
+            summary = f"Знайдено груп: {len(self.loaded_data)} | Всього студентів: {total_students}\n"
+            summary += "=" * 80 + "\n\n"
 
-        table_container = ctk.CTkFrame(self.tab_upload)
-        table_container.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
-        table_container.grid_columnconfigure(0, weight=1)
-        table_container.grid_rowconfigure(0, weight=1)
+            for grp, info in self.loaded_data.items():
+                summary += f"ГРУПА: {grp} | Навч. рік: {info['study_year']} | Куратор: {info['curator']}\n"
+                summary += f"{'ID':<4} | {'ПІБ':<35} | {'Фінанс.':<8} | {'Примітка'}\n"
+                summary += "-" * 75 + "\n"
+                for idx, s in enumerate(info["students"], 1):
+                    summary += f"{idx:<4} | {s['full_name']:<35} | {s['funding']:<8} | {s['note']}\n"
+                summary += "\n"
 
-        self.students_text = ctk.CTkTextbox(table_container, font=("Consolas", 13))
-        self.students_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.students_text.insert("0.0", "Тут з'явиться список студентів після вибору файлу...")
+            self.import_textbox.insert("end", summary)
+            self.save_import_btn.configure(state="normal")
+        except Exception as e:
+            messagebox.showerror("Помилка парсингу", str(e))
 
-        self.save_db_btn = ctk.CTkButton(self.tab_upload, text="Зберегти дані в БД та нарахувати бали", fg_color="#1864ab", hover_color="#0b5ed7", height=40, state="disabled", command=self.save_to_database)
-        self.save_db_btn.grid(row=3, column=0, padx=10, pady=15, sticky="ew")
+    def save_parsed_to_db(self):
+        if not self.loaded_data:
+            return
 
-    def setup_rating_tab(self):
-        self.tab_rating.grid_columnconfigure(0, weight=1)
-        self.tab_rating.grid_rowconfigure(1, weight=1)
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
 
-        top_bar = ctk.CTkFrame(self.tab_rating, fg_color="transparent")
-        top_bar.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+            for grp_name, data in self.loaded_data.items():
+                tbl_name = database.create_group_table(cursor, grp_name, data["study_year"], data["curator"])
+                # Очищаємо таблицю перед імпортом, якщо вона вже була
+                cursor.execute(f"TRUNCATE TABLE {tbl_name} RESTART IDENTITY;")
 
-        refresh_btn = ctk.CTkButton(top_bar, text="Оновити рейтинг", command=self.load_ratings)
-        refresh_btn.pack(side="left")
+                for s in data["students"]:
+                    database.insert_student(cursor, tbl_name, s["full_name"], grp_name, s["funding"], data["curator"], s["note"])
 
-        rating_container = ctk.CTkFrame(self.tab_rating)
-        rating_container.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-        rating_container.grid_columnconfigure(0, weight=1)
-        rating_container.grid_rowconfigure(0, weight=1)
+            conn.commit()
+            cursor.close()
+            conn.close()
 
-        self.rating_text = ctk.CTkTextbox(rating_container, font=("Consolas", 13))
-        self.rating_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+            messagebox.showinfo("Успіх", "Усі групи та списки студентів успішно збережені в базі даних!")
+            self.refresh_groups_dropdown()
+            self.tabview.set("Керування студентами (CRUD)")
+        except Exception as e:
+            messagebox.showerror("Помилка запису в БД", str(e))
 
-    def browse_file(self):
-        file_types = [("Word документи", "*.docx;*.doc"), ("Усі файли", "*.*")]
-        path = filedialog.askopenfilename(filetypes=file_types)
-        if path:
-            self.file_path = path
-            self.file_label.configure(text=f"Файл: {os.path.basename(path)}")
+    # --- ВКЛАДКА 2: CRUD ОПЕРАЦІЇ ---
+    def setup_crud_tab(self):
+        self.tab_crud.grid_columnconfigure(0, weight=1)
+        self.tab_crud.grid_rowconfigure(2, weight=1)
+
+        ctrl_frame = ctk.CTkFrame(self.tab_crud, fg_color="transparent")
+        ctrl_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+
+        ctk.CTkLabel(ctrl_frame, text="Оберіть групу:").pack(side="left", padx=5)
+        self.group_dropdown = ctk.CTkOptionMenu(ctrl_frame, values=["(Немає груп)"], command=self.load_group_students)
+        self.group_dropdown.pack(side="left", padx=5)
+
+        refresh_btn = ctk.CTkButton(ctrl_frame, text="Оновити список", width=110, command=self.refresh_groups_dropdown)
+        refresh_btn.pack(side="left", padx=10)
+
+        # Кнопки дій CRUD
+        btn_add = ctk.CTkButton(ctrl_frame, text="+ Додати студента", fg_color="#2b8a3e", width=130, command=self.add_student_dialog)
+        btn_add.pack(side="left", padx=5)
+
+        btn_edit = ctk.CTkButton(ctrl_frame, text="Редагувати", fg_color="#e8590c", width=100, command=self.edit_student_dialog)
+        btn_edit.pack(side="left", padx=5)
+
+        btn_del = ctk.CTkButton(ctrl_frame, text="Видалити", fg_color="#c92a2a", width=100, command=self.delete_student_dialog)
+        btn_del.pack(side="left", padx=5)
+
+        # Інфо-панель куратора та року
+        self.lbl_group_info = ctk.CTkLabel(self.tab_crud, text="Куратор: — | Навчальний рік: —", font=("Arial", 13, "bold"))
+        self.lbl_group_info.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+
+        # Текстове поле таблиці студентів
+        self.crud_textbox = ctk.CTkTextbox(self.tab_crud, font=("Consolas", 12))
+        self.crud_textbox.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
+
+    def refresh_groups_dropdown(self):
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            groups = database.get_all_registered_groups(cursor)
+            cursor.close()
+            conn.close()
+
+            if groups:
+                values = [f"{g[0]} ({g[1]})" for g in groups]
+                self.group_dropdown.configure(values=values)
+                self.group_dropdown.set(values[0])
+                self.load_group_students(values[0])
+            else:
+                self.group_dropdown.configure(values=["(Немає груп)"])
+                self.group_dropdown.set("(Немає груп)")
+        except Exception:
+            pass
+
+    def load_group_students(self, selection):
+        if not selection or "(Немає" in selection:
+            return
+
+        table_name = selection.split("(")[1].replace(")", "").strip()
+        self.selected_group_table = table_name
+
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT study_year, curator FROM groups_registry WHERE table_name = %s;", (table_name,))
+            reg_info = cursor.fetchone()
+            if reg_info:
+                self.lbl_group_info.configure(text=f"Навчальний рік: {reg_info[0]} | Куратор: {reg_info[1]}")
+
+            students = database.get_students_from_group(cursor, table_name)
+            cursor.close()
+            conn.close()
+
+            self.crud_textbox.delete("0.0", "end")
+            out = f"{'ID':<4} | {'ПІБ Студента':<35} | {'Група':<10} | {'Форма':<6} | {'Примітка'}\n"
+            out += "=" * 80 + "\n"
+
+            for s in students:
+                out += f"{s[0]:<4} | {s[1]:<35} | {s[2]:<10} | {s[3]:<6} | {s[5]}\n"
+
+            if not students:
+                out += "\nТаблиця групи порожня. Скористайтеся кнопкою '+ Додати студента'."
+
+            self.crud_textbox.insert("end", out)
+        except Exception as e:
+            messagebox.showerror("Помилка читання", str(e))
+
+    def add_student_dialog(self):
+        if not self.selected_group_table:
+            messagebox.showwarning("Увага", "Спочатку оберіть групу!")
+            return
+
+        name = simpledialog.askstring("Додати студента", "Введіть ПІБ студента:")
+        if not name:
+            return
+        funding = simpledialog.askstring("Форма фінансування", "Введіть джерело (ДЗ або К):", initialvalue="ДЗ")
+        if not funding:
+            return
+        note = simpledialog.askstring("Примітка", "Введіть примітку (УБД, 25+, номер тощо):", initialvalue="—")
+
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT group_name, curator FROM groups_registry WHERE table_name = %s;", (self.selected_group_table,))
+            grp_info = cursor.fetchone()
+            database.insert_student(cursor, self.selected_group_table, name.strip(), grp_info[0], funding.strip().upper(), grp_info[1], note.strip() if note else "—")
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            messagebox.showinfo("Успіх", "Студента додано!")
+            self.load_group_students(self.group_dropdown.get())
+        except Exception as e:
+            messagebox.showerror("Помилка", str(e))
+
+    def edit_student_dialog(self):
+        if not self.selected_group_table:
+            return
+
+        student_id = simpledialog.askinteger("Редагування", "Введіть ID студента для редагування:")
+        if not student_id:
+            return
+
+        new_name = simpledialog.askstring("Редагування", "Нове ПІБ студента:")
+        if not new_name:
+            return
+        new_funding = simpledialog.askstring("Редагування", "Нове фінансування (ДЗ / К):", initialvalue="ДЗ")
+        new_note = simpledialog.askstring("Редагування", "Нова примітка:", initialvalue="—")
+
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            database.update_student(cursor, self.selected_group_table, student_id, new_name.strip(), new_funding.strip().upper(), new_note.strip() if new_note else "—")
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            messagebox.showinfo("Успіх", "Дані оновлено!")
+            self.load_group_students(self.group_dropdown.get())
+        except Exception as e:
+            messagebox.showerror("Помилка", str(e))
+
+    def delete_student_dialog(self):
+        if not self.selected_group_table:
+            return
+
+        student_id = simpledialog.askinteger("Видалення", "Введіть ID студента для видалення:")
+        if not student_id:
+            return
+
+        if messagebox.askyesno("Підтвердження", f"Видалити студента з ID {student_id}?"):
             try:
-                self.parsed_data = parse_order_file(path)
-                self.display_parsed_info()
-                self.save_db_btn.configure(state="normal")
+                conn = self.get_db_connection()
+                cursor = conn.cursor()
+                database.delete_student(cursor, self.selected_group_table, student_id)
+                conn.commit()
+                cursor.close()
+                conn.close()
+
+                messagebox.showinfo("Успіх", "Студента видалено!")
+                self.load_group_students(self.group_dropdown.get())
             except Exception as e:
-                messagebox.showerror("Помилка парсингу", f"Не вдалося опрацювати файл:\n{e}")
-
-    def display_parsed_info(self):
-        if not self.parsed_data:
-            return
-
-        self.lbl_num.configure(text=f"Номер: {self.parsed_data['order_number']}")
-        self.lbl_date.configure(text=f"Дата: {self.parsed_data['order_date']}")
-        self.lbl_level.configure(text=f"Рівень: {self.parsed_data['level']}")
-        self.lbl_points.configure(text=f"Бали за замовч.: {self.parsed_data['points']}")
-
-        self.students_text.delete("0.0", "end")
-        header = f"{'№':<4} | {'ПІБ Студента':<35} | {'Група':<15} | {'Бали':<5}\n"
-        header += "-" * 65 + "\n"
-        self.students_text.insert("end", header)
-
-        for idx, student in enumerate(self.parsed_data['students'], 1):
-            row = f"{idx:<4} | {student['full_name']:<35} | {student['group_name']:<15} | {student['points']:<5}\n"
-            self.students_text.insert("end", row)
-
-    def save_to_database(self):
-        if not self.parsed_data or not self.parsed_data['students']:
-            messagebox.showwarning("Попередження", "Немає даних для збереження!")
-            return
-
-        config = self.get_db_config()
-        try:
-            conn = psycopg2.connect(**config)
-            cursor = conn.cursor()
-
-            # 1. Зберігаємо або отримуємо наказ
-            cursor.execute("""
-                INSERT INTO orders (order_number, order_date, level)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (order_number, order_date) DO UPDATE 
-                SET level = EXCLUDED.level
-                RETURNING id;
-            """, (
-                self.parsed_data['order_number'],
-                self.parsed_data['order_date'],
-                self.parsed_data['level']
-            ))
-            order_id = cursor.fetchone()[0]
-
-            # 2. Додаємо/оновлюємо студентів (унікальних за ПІБ і групою) та сумуємо бали
-            for student in self.parsed_data['students']:
-                cursor.execute("""
-                    INSERT INTO students (full_name, group_name, total_points)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (full_name, group_name) DO UPDATE 
-                    SET total_points = students.total_points + EXCLUDED.total_points
-                    RETURNING id;
-                """, (
-                    student['full_name'],
-                    student['group_name'],
-                    student['points']
-                ))
-                student_id = cursor.fetchone()[0]
-
-                # Записуємо кожне конкретне досягнення у зв'язуючу таблицю
-                cursor.execute("""
-                    INSERT INTO achievements (student_id, order_id, points_awarded)
-                    VALUES (%s, %s, %s);
-                """, (student_id, order_id, student['points']))
-
-            conn.commit()
-            cursor.close()
-            conn.close()
-
-            messagebox.showinfo("Успіх", "Дані успішно збережено в БД PostgreSQL, а бали нараховано студентам!")
-            self.load_ratings()
-            self.tabview.set("Рейтинг студентів")
-
-        except Exception as e:
-            messagebox.showerror("Помилка БД", f"Помилка при збереженні в базу даних:\n{e}")
-
-    def load_ratings(self):
-        config = self.get_db_config()
-        try:
-            conn = psycopg2.connect(**config)
-            cursor = conn.cursor()
-            
-            # Читаємо унікальних студентів із сумою їхніх балів із таблиці students
-            cursor.execute("""
-                SELECT full_name, group_name, total_points 
-                FROM students 
-                ORDER BY total_points DESC;
-            """)
-            rows = cursor.fetchall()
-            
-            cursor.close()
-            conn.close()
-
-            self.rating_text.delete("0.0", "end")
-            header = f"{'Місце':<6} | {'ПІБ Студента':<35} | {'Група':<15} | {'Загалом балів':<12}\n"
-            header += "-" * 75 + "\n"
-            self.rating_text.insert("end", header)
-
-            for idx, row in enumerate(rows, 1):
-                line = f"{idx:<6} | {row[0]:<35} | {row[1]:<15} | {row[2]:<12}\n"
-                self.rating_text.insert("end", line)
-
-            if not rows:
-                self.rating_text.insert("end", "База даних поки що порожня.")
-
-        except Exception as e:
-            self.rating_text.delete("0.0", "end")
-            self.rating_text.insert("end", f"Не вдалося завантажити рейтинг (перевірте підключення до БД):\n{e}")
+                messagebox.showerror("Помилка", str(e))
 
 if __name__ == "__main__":
-    app = OrderAutomationApp()
+    app = StudentManagementApp()
     app.mainloop()
