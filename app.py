@@ -1,4 +1,5 @@
 import os
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -15,58 +16,65 @@ class StudentManagementApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("Автоматизація документообігу — Коледж (Студенти, Накази, Рейтинг)")
-        self.geometry("1250x800")
-        self.minsize(1000, 700)
+        self.title("Автоматизація документообігу — Коледж (Студенти, Накази, Рейтинг, СЕРЕДОВИЩЕ БД)")
+        self.geometry("1450x850")
+        self.minsize(1100, 700)
 
         self.loaded_data = None
         self.loaded_reward_data = None
         self.selected_group_table = None
+        self.selected_db_table = None
 
         self.create_widgets()
 
     def create_widgets(self):
-        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=3)
+        self.grid_columnconfigure(1, weight=2)  # Правий сайдбар для бази даних
         self.grid_rowconfigure(1, weight=1)
 
+        # Верхня панель підключення та звітів
         db_frame = ctk.CTkFrame(self)
-        db_frame.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
+        db_frame.grid(row=0, column=0, columnspan=2, padx=15, pady=10, sticky="ew")
 
-        ctk.CTkLabel(db_frame, text="Хост:").grid(row=0, column=0, padx=4, pady=8)
-        self.host_entry = ctk.CTkEntry(db_frame, width=70)
+        ctk.CTkLabel(db_frame, text="Хост:").grid(row=0, column=0, padx=3, pady=8)
+        self.host_entry = ctk.CTkEntry(db_frame, width=65)
         self.host_entry.insert(0, "localhost")
-        self.host_entry.grid(row=0, column=1, padx=4, pady=8)
+        self.host_entry.grid(row=0, column=1, padx=3, pady=8)
 
-        ctk.CTkLabel(db_frame, text="Порт:").grid(row=0, column=2, padx=4, pady=8)
-        self.port_entry = ctk.CTkEntry(db_frame, width=45)
+        ctk.CTkLabel(db_frame, text="Порт:").grid(row=0, column=2, padx=3, pady=8)
+        self.port_entry = ctk.CTkEntry(db_frame, width=40)
         self.port_entry.insert(0, "5432")
-        self.port_entry.grid(row=0, column=3, padx=4, pady=8)
+        self.port_entry.grid(row=0, column=3, padx=3, pady=8)
 
-        ctk.CTkLabel(db_frame, text="БД:").grid(row=0, column=4, padx=4, pady=8)
-        self.dbname_entry = ctk.CTkEntry(db_frame, width=70)
+        ctk.CTkLabel(db_frame, text="БД:").grid(row=0, column=4, padx=3, pady=8)
+        self.dbname_entry = ctk.CTkEntry(db_frame, width=65)
         self.dbname_entry.insert(0, "college_db")
-        self.dbname_entry.grid(row=0, column=5, padx=4, pady=8)
+        self.dbname_entry.grid(row=0, column=5, padx=3, pady=8)
 
-        ctk.CTkLabel(db_frame, text="Користувач:").grid(row=0, column=6, padx=4, pady=8)
-        self.user_entry = ctk.CTkEntry(db_frame, width=70)
+        ctk.CTkLabel(db_frame, text="Користувач:").grid(row=0, column=6, padx=3, pady=8)
+        self.user_entry = ctk.CTkEntry(db_frame, width=65)
         self.user_entry.insert(0, "postgres")
-        self.user_entry.grid(row=0, column=7, padx=4, pady=8)
+        self.user_entry.grid(row=0, column=7, padx=3, pady=8)
 
-        ctk.CTkLabel(db_frame, text="Пароль:").grid(row=0, column=8, padx=4, pady=8)
-        self.pass_entry = ctk.CTkEntry(db_frame, width=70, show="*")
-        self.pass_entry.grid(row=0, column=9, padx=4, pady=8)
+        ctk.CTkLabel(db_frame, text="Пароль:").grid(row=0, column=8, padx=3, pady=8)
+        self.pass_entry = ctk.CTkEntry(db_frame, width=65, show="*")
+        self.pass_entry.grid(row=0, column=9, padx=3, pady=8)
 
-        connect_btn = ctk.CTkButton(db_frame, text="Підключитися", fg_color="#2b8a3e", width=95, command=self.test_connection)
-        connect_btn.grid(row=0, column=10, padx=5, pady=8)
+        connect_btn = ctk.CTkButton(db_frame, text="Підключитися", fg_color="#2b8a3e", width=90, command=self.test_connection)
+        connect_btn.grid(row=0, column=10, padx=4, pady=8)
 
-        clear_rewards_btn = ctk.CTkButton(db_frame, text="Очистити накази/бали", fg_color="#e8590c", hover_color="#d9480f", width=130, command=self.clear_rewards_only)
-        clear_rewards_btn.grid(row=0, column=11, padx=5, pady=8)
+        save_report_btn = ctk.CTkButton(db_frame, text="💾 Звітність-2026/2027", fg_color="#1864ab", width=140, command=self.save_database_backup)
+        save_report_btn.grid(row=0, column=11, padx=4, pady=8)
 
-        clear_db_btn = ctk.CTkButton(db_frame, text="Очистити всю БД", fg_color="#c92a2a", hover_color="#a61e1e", width=110, command=self.clear_entire_database)
-        clear_db_btn.grid(row=0, column=12, padx=5, pady=8)
+        clear_rewards_btn = ctk.CTkButton(db_frame, text="Очистити накази/бали", fg_color="#e8590c", width=120, command=self.clear_rewards_only)
+        clear_rewards_btn.grid(row=0, column=12, padx=4, pady=8)
 
+        clear_db_btn = ctk.CTkButton(db_frame, text="Очистити всю БД", fg_color="#c92a2a", width=105, command=self.clear_entire_database)
+        clear_db_btn.grid(row=0, column=13, padx=4, pady=8)
+
+        # Ліва частина — головні вкладки програми
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="nsew")
+        self.tabview.grid(row=1, column=0, padx=(15, 5), pady=(0, 15), sticky="nsew")
 
         self.tab_import = self.tabview.add("Імпорт списків з Word")
         self.tab_crud = self.tabview.add("Керування студентами (CRUD)")
@@ -77,6 +85,9 @@ class StudentManagementApp(ctk.CTk):
         self.setup_crud_tab()
         self.setup_rewards_tab()
         self.setup_rating_tab()
+
+        # Права частина — окремий розділ «База даних» (середовище БД)
+        self.setup_database_environment_sidebar()
 
     def get_db_connection(self):
         return psycopg2.connect(
@@ -99,6 +110,64 @@ class StudentManagementApp(ctk.CTk):
             self.refresh_all_views()
         except Exception as e:
             messagebox.showerror("Помилка БД", f"Не вдалося підключитися:\n{e}")
+
+    def save_database_backup(self):
+        """Зберігає поточну версію бази даних як звіт/резервну копію (дамп)."""
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".sql",
+            initialfile="Звітність-2026_2027.sql",
+            filetypes=[("SQL Dump Files", "*.sql"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        try:
+            db_name = self.dbname_entry.get().strip()
+            user = self.user_entry.get().strip()
+            host = self.host_entry.get().strip()
+            port = self.port_entry.get().strip()
+            password = self.pass_entry.get().strip()
+
+            # Використовуємо системну утиліту pg_dump для створення бэкапу
+            env = os.environ.copy()
+            if password:
+                env["PGPASSWORD"] = password
+
+            import subprocess
+            pg_dump_path = "pg_dump"  # Має бути в PATH або прописаний шлях
+            cmd = [pg_dump_path, "-h", host, "-p", port, "-U", user, "-d", db_name, "-F", "p", "-f", file_path]
+            
+            process = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            if process.returncode == 0:
+                messagebox.showinfo("Успіх", f"Поточну версію бази даних успішно збережено як звіт:\n{file_path}")
+            else:
+                # Альтернативний ручний експорт таблиць у текстовий звіт, якщо pg_dump недоступний
+                self.export_manual_report(file_path)
+        except Exception as e:
+            try:
+                self.export_manual_report(file_path)
+            except Exception as ex:
+                messagebox.showerror("Помилка збереження", f"Не вдалося створити звіт:\n{ex}")
+
+    def export_manual_report(self, file_path):
+        """Резервний метод ручного експорту таблиць у файл звіту."""
+        conn = self.get_db_connection()
+        cursor = conn.cursor()
+        tables = database.get_all_db_tables(cursor)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("=== ЗВІТНІСТЬ БАЗИ ДАНИХ КОЛЕДЖУ (2026/2027) ===\n\n")
+            for tbl in tables:
+                f.write(f"--- ТАБЛИЦЯ: {tbl} ---\n")
+                cols, rows = database.get_table_data(cursor, tbl)
+                f.write(" | ".join(cols) + "\n")
+                f.write("-" * 50 + "\n")
+                for r in rows:
+                    f.write(" | ".join([str(val) for val in r]) + "\n")
+                f.write("\n\n")
+        cursor.close()
+        conn.close()
+        messagebox.showinfo("Успіх", f"Звітність успішно сформована та збережена у файлі:\n{file_path}")
 
     def clear_rewards_only(self):
         if not messagebox.askyesno("Підтвердження", "Очистити всі збережені накази про нагородження та нараховані бали?"):
@@ -134,6 +203,179 @@ class StudentManagementApp(ctk.CTk):
     def refresh_all_views(self):
         self.refresh_groups_dropdown()
         self.load_rating_data()
+        self.refresh_db_sidebar_tables()
+
+    # --- ПРАВИЙ САЙДБАР: СЕРЕДОВИЩЕ БАЗИ ДАНИХ ---
+    def setup_database_environment_sidebar(self):
+        db_sidebar = ctk.CTkFrame(self, fg_color=("#f1f3f5", "#212529"))
+        db_sidebar.grid(row=1, column=1, padx=(5, 15), pady=(0, 15), sticky="nsew")
+        db_sidebar.grid_columnconfigure(0, weight=1)
+        db_sidebar.grid_rowconfigure(2, weight=1)
+
+        ctk.CTkLabel(db_sidebar, text="🗄️ Середовище БД", font=("Arial", 15, "bold")).grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
+
+        # Панель вибору таблиці та керування
+        ctrl_sb = ctk.CTkFrame(db_sidebar, fg_color="transparent")
+        ctrl_sb.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+
+        ctk.CTkLabel(ctrl_sb, text="Таблиця:").pack(side="left", padx=2)
+        self.db_table_dropdown = ctk.CTkOptionMenu(ctrl_sb, values=["(Немає таблиць)"], width=150, command=self.load_db_table_data)
+        self.db_table_dropdown.pack(side="left", padx=5)
+
+        drop_tbl_btn = ctk.CTkButton(ctrl_sb, text="🗑 Видалити таблицю", fg_color="#c92a2a", hover_color="#a61e1e", width=120, command=self.drop_selected_db_table)
+        drop_tbl_btn.pack(side="right", padx=2)
+
+        # Таблиця (Treeview) для перегляду довільної таблиці БД
+        table_frame_sb = ctk.CTkFrame(db_sidebar)
+        table_frame_sb.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
+        table_frame_sb.grid_columnconfigure(0, weight=1)
+        table_frame_sb.grid_rowconfigure(0, weight=1)
+
+        self.db_tree = ttk.Treeview(table_frame_sb, show="headings", selectmode="browse")
+        
+        sb_scroll_y = ttk.Scrollbar(table_frame_sb, orient="vertical", command=self.db_tree.yview)
+        sb_scroll_x = ttk.Scrollbar(table_frame_sb, orient="horizontal", command=self.db_tree.xview)
+        self.db_tree.configure(yscrollcommand=sb_scroll_y.set, xscrollcommand=sb_scroll_x.set)
+
+        self.db_tree.grid(row=0, column=0, sticky="nsew")
+        sb_scroll_y.grid(row=0, column=1, sticky="ns")
+        sb_scroll_x.grid(row=1, column=0, sticky="ew")
+
+        self.db_tree.bind("<Double-1>", self.on_db_table_cell_double_click)
+
+        hint_db = ctk.CTkLabel(db_sidebar, text="💡 Двічі клікніть на рядок таблиці БД для редагування клітинки або видалення рядка.", text_color="gray", font=("Arial", 11))
+        hint_db.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+
+    def refresh_db_sidebar_tables(self):
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            tables = database.get_all_db_tables(cursor)
+            cursor.close()
+            conn.close()
+
+            if tables:
+                self.db_table_dropdown.configure(values=tables)
+                if self.selected_db_table not in tables:
+                    self.selected_db_table = tables[0]
+                self.db_table_dropdown.set(self.selected_db_table)
+                self.load_db_table_data(self.selected_db_table)
+            else:
+                self.db_table_dropdown.configure(values=["(Немає таблиць)"])
+                self.db_table_dropdown.set("(Немає таблиць)")
+                for row in self.db_tree.get_children():
+                    self.db_tree.delete(row)
+        except Exception:
+            pass
+
+    def load_db_table_data(self, table_name):
+        if not table_name or "(" in table_name:
+            return
+        self.selected_db_table = table_name
+
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            columns, rows = database.get_table_data(cursor, table_name)
+            cursor.close()
+            conn.close()
+
+            # Налаштовуємо колонки Treeview динамічно під будь-яку таблицю БД
+            self.db_tree.configure(columns=columns)
+            for col in columns:
+                self.db_tree.heading(col, text=col)
+                self.db_tree.column(col, width=120, anchor="w")
+
+            for row in self.db_tree.get_children():
+                self.db_tree.delete(row)
+
+            for r in rows:
+                self.db_tree.insert("", "end", values=r)
+
+        except Exception as e:
+            messagebox.showerror("Помилка БД", str(e))
+
+    def drop_selected_db_table(self):
+        if not self.selected_db_table:
+            return
+        if not messagebox.askyesno("Підтвердження", f"Ви дійсно хочете повністю видалити таблицю '{self.selected_db_table}' з бази даних?"):
+            return
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            database.drop_entire_table(cursor, self.selected_db_table)
+            conn.commit()
+            cursor.close()
+            conn.close()
+            messagebox.showinfo("Успіх", f"Таблицю '{self.selected_db_table}' видалено!")
+            self.refresh_all_views()
+        except Exception as e:
+            messagebox.showerror("Помилка", str(e))
+
+    def on_db_table_cell_double_click(self, event):
+        """Редагування клітинки або видалення рядка у середовищі БД."""
+        selected_item = self.db_tree.selection()
+        if not selected_item:
+            return
+
+        item_data = self.db_tree.item(selected_item)
+        values = item_data['values']
+        columns = self.db_tree["columns"]
+        row_id = values[0]  # Припускаємо, що перша колонка — це ID
+
+        region = self.db_tree.identify("region", event.x, event.y)
+        column_id = self.db_tree.identify_column(event.x)
+        col_index = int(column_id.replace("#", "")) - 1
+        col_name = columns[col_index]
+        current_val = values[col_index]
+
+        # Вікно керування рядком/клітинкою у середовищі БД
+        edit_db_win = ctk.CTkToplevel(self)
+        edit_db_win.title(f"Керування таблицею: {self.selected_db_table}")
+        edit_db_win.geometry("400x300")
+        edit_db_win.grab_set()
+
+        ctk.CTkLabel(edit_db_win, text=f"Редагування поля [{col_name}] для ID = {row_id}", font=("Arial", 12, "bold")).pack(padx=20, pady=(15, 5))
+        
+        val_entry = ctk.CTkEntry(edit_db_win, width=350)
+        val_entry.insert(0, str(current_val))
+        val_entry.pack(padx=20, pady=10)
+
+        def save_cell_edit():
+            if not messagebox.askyesno("Підтвердження", "Зберегти зміни в базі даних?"):
+                return
+            new_val = val_entry.get().strip()
+            try:
+                conn = self.get_db_connection()
+                cursor = conn.cursor()
+                database.update_table_cell(cursor, self.selected_db_table, col_name, new_val, row_id)
+                conn.commit()
+                cursor.close()
+                conn.close()
+                messagebox.showinfo("Успіх", "Дані оновлено!")
+                edit_db_win.destroy()
+                self.load_db_table_data(self.selected_db_table)
+            except Exception as e:
+                messagebox.showerror("Помилка", str(e))
+
+        def delete_entire_row():
+            if not messagebox.askyesno("Підтвердження", f"Видалити весь рядок (ID = {row_id})?"):
+                return
+            try:
+                conn = self.get_db_connection()
+                cursor = conn.cursor()
+                database.delete_table_row(cursor, self.selected_db_table, row_id)
+                conn.commit()
+                cursor.close()
+                conn.close()
+                messagebox.showinfo("Успіх", "Рядок видалено!")
+                edit_db_win.destroy()
+                self.load_db_table_data(self.selected_db_table)
+            except Exception as e:
+                messagebox.showerror("Помилка", str(e))
+
+        ctk.CTkButton(edit_db_win, text="Зберегти зміну поля", fg_color="#2b8a3e", command=save_cell_edit).pack(padx=20, pady=10)
+        ctk.CTkButton(edit_db_win, text="🗑 Видалити весь рядок", fg_color="#c92a2a", command=delete_entire_row).pack(padx=20, pady=5)
 
     # --- ВКЛАДКА 1: ІМПОРТ З WORD ---
     def setup_import_tab(self):
@@ -243,10 +485,10 @@ class StudentManagementApp(ctk.CTk):
         self.tree.heading("action", text="Дія")
 
         self.tree.column("id", width=50, anchor="center")
-        self.tree.column("full_name", width=300, anchor="w")
-        self.tree.column("funding", width=100, anchor="center")
-        self.tree.column("note", width=350, anchor="w")
-        self.tree.column("action", width=100, anchor="center")
+        self.tree.column("full_name", width=250, anchor="w")
+        self.tree.column("funding", width=90, anchor="center")
+        self.tree.column("note", width=250, anchor="w")
+        self.tree.column("action", width=90, anchor="center")
 
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -359,6 +601,7 @@ class StudentManagementApp(ctk.CTk):
                 messagebox.showinfo("Успіх", "Дані студента оновлено!")
                 edit_window.destroy()
                 self.load_group_students(self.group_dropdown.get())
+                self.refresh_db_sidebar_tables()
             except Exception as e:
                 messagebox.showerror("Помилка", str(e))
 
@@ -377,6 +620,7 @@ class StudentManagementApp(ctk.CTk):
 
                 messagebox.showinfo("Успіх", "Студента успішно видалено!")
                 self.load_group_students(self.group_dropdown.get())
+                self.refresh_db_sidebar_tables()
             except Exception as e:
                 messagebox.showerror("Помилка", str(e))
 
@@ -428,13 +672,14 @@ class StudentManagementApp(ctk.CTk):
                 messagebox.showinfo("Успіх", "Студента успішно додано!")
                 add_window.destroy()
                 self.load_group_students(self.group_dropdown.get())
+                self.refresh_db_sidebar_tables()
             except Exception as e:
                 messagebox.showerror("Помилка", str(e))
 
         save_btn = ctk.CTkButton(add_window, text="Додати в БД", fg_color="#2b8a3e", command=save_new_student)
         save_btn.pack(padx=20, pady=20)
 
-    # --- ВКЛАДКА 3: НАГОРОДЖЕННЯ (ІНФО ЗВЕРХУ, ТАБЛИЦЯ ЗНИЗУ) ---
+    # --- ВКЛАДКА 3: НАГОРОДЖЕННЯ (НАКАЗИ) ---
     def setup_rewards_tab(self):
         self.tab_rewards.grid_columnconfigure(0, weight=1)
         self.tab_rewards.grid_rowconfigure(2, weight=1)
@@ -451,7 +696,6 @@ class StudentManagementApp(ctk.CTk):
         self.save_rew_btn = ctk.CTkButton(top_p, text="Зберегти наказ та нарахувати бали в БД", fg_color="#1864ab", state="disabled", command=self.save_reward_to_db)
         self.save_rew_btn.pack(side="right", padx=5)
 
-        # Інфо-панель про завантажений наказ
         self.order_info_frame = ctk.CTkFrame(self.tab_rewards)
         self.order_info_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         self.order_info_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
@@ -482,10 +726,10 @@ class StudentManagementApp(ctk.CTk):
         self.rew_tree.heading("action", text="Дія")
 
         self.rew_tree.column("num", width=50, anchor="center")
-        self.rew_tree.column("name", width=350, anchor="w")
-        self.rew_tree.column("grp", width=150, anchor="center")
-        self.rew_tree.column("pts", width=80, anchor="center")
-        self.rew_tree.column("action", width=100, anchor="center")
+        self.rew_tree.column("name", width=250, anchor="w")
+        self.rew_tree.column("grp", width=120, anchor="center")
+        self.rew_tree.column("pts", width=70, anchor="center")
+        self.rew_tree.column("action", width=90, anchor="center")
 
         rew_scroll = ttk.Scrollbar(rew_frame, orient="vertical", command=self.rew_tree.yview)
         self.rew_tree.configure(yscrollcommand=rew_scroll.set)
@@ -494,9 +738,6 @@ class StudentManagementApp(ctk.CTk):
         rew_scroll.grid(row=0, column=1, sticky="ns")
 
         self.rew_tree.bind("<Double-1>", self.on_reward_row_double_click)
-
-        hint_rew = ctk.CTkLabel(self.tab_rewards, text="💡 Підказка: Двічі клікніть на рядок студента у таблиці нагороджень, щоб відредагувати ПІБ/групу або видалити його.", text_color="gray")
-        hint_rew.grid(row=3, column=0, padx=10, pady=5, sticky="w")
 
     def browse_reward_file(self):
         path = filedialog.askopenfilename(filetypes=[("Word Documents", "*.docx;*.doc"), ("All Files", "*.*")])
@@ -555,7 +796,6 @@ class StudentManagementApp(ctk.CTk):
                 self.rew_tree.insert("", "end", values=(idx, st["full_name"], st["group_name"], self.loaded_reward_data["points"], "🗑 Видалити"))
 
             self.save_rew_btn.configure(state="normal")
-            messagebox.showinfo("Аналіз завершено", f"Наказ №{self.loaded_reward_data['order_number']}\nЗнайдено студентів: {len(self.loaded_reward_data['students'])}\nУспішно зіставлено з БД: {matched_count}")
         except Exception as e:
             messagebox.showerror("Помилка розпізнавання наказу", str(e))
 
@@ -660,11 +900,12 @@ class StudentManagementApp(ctk.CTk):
 
             messagebox.showinfo("Успіх", f"Наказ успішно збережено в БД! Нараховано бали для {success_count} студентів.")
             self.load_rating_data()
+            self.refresh_db_sidebar_tables()
             self.tabview.set("Рейтинг студентів")
         except Exception as e:
             messagebox.showerror("Помилка збереження в БД", str(e))
 
-    # --- ВКЛАДКА 4: РЕЙТИНГ СТУДЕНТІВ З CRUD-ОПЕРАЦІЯМИ ---
+    # --- ВКЛАДКА 4: РЕЙТИНГ СТУДЕНТІВ (ТІЛЬКИ ПЕРЕГЛЯД, БЕЗ РЕДАГУВАННЯ) ---
     def setup_rating_tab(self):
         self.tab_rating.grid_columnconfigure(0, weight=1)
         self.tab_rating.grid_rowconfigure(1, weight=1)
@@ -684,20 +925,18 @@ class StudentManagementApp(ctk.CTk):
         rt_frame.grid_columnconfigure(0, weight=1)
         rt_frame.grid_rowconfigure(0, weight=1)
 
-        columns = ("place", "name", "grp", "total_pts", "action")
+        columns = ("place", "name", "grp", "total_pts")
         self.rating_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse")
         
         self.rating_tree.heading("place", text="Місце")
         self.rating_tree.heading("name", text="ПІБ Студента")
         self.rating_tree.heading("grp", text="Група")
         self.rating_tree.heading("total_pts", text="Загалом балів")
-        self.rating_tree.heading("action", text="Дія")
 
         self.rating_tree.column("place", width=70, anchor="center")
         self.rating_tree.column("name", width=330, anchor="w")
         self.rating_tree.column("grp", width=120, anchor="center")
         self.rating_tree.column("total_pts", width=120, anchor="center")
-        self.rating_tree.column("action", width=130, anchor="center")
 
         rt_scroll = ttk.Scrollbar(rt_frame, orient="vertical", command=self.rating_tree.yview)
         self.rating_tree.configure(yscrollcommand=rt_scroll.set)
@@ -705,9 +944,7 @@ class StudentManagementApp(ctk.CTk):
         self.rating_tree.grid(row=0, column=0, sticky="nsew")
         rt_scroll.grid(row=0, column=1, sticky="ns")
 
-        self.rating_tree.bind("<Double-1>", self.on_rating_double_click)
-
-        hint_rt = ctk.CTkLabel(self.tab_rating, text="💡 Підказка: Двічі клікніть на рядок студента у рейтингу, щоб керувати його балами/досягненнями (CRUD).", text_color="gray")
+        hint_rt = ctk.CTkLabel(self.tab_rating, text="💡 Рейтингова таблиця студентів за загальною сумою набраних балів.", text_color="gray")
         hint_rt.grid(row=2, column=0, padx=10, pady=5, sticky="w")
 
     def load_rating_data(self):
@@ -742,8 +979,6 @@ class StudentManagementApp(ctk.CTk):
                 
                 for row in cursor.fetchall():
                     students_rating.append({
-                        "table_name": tbl,
-                        "student_id": row[0],
                         "full_name": row[1],
                         "group_name": row[2],
                         "total": row[3]
@@ -758,103 +993,10 @@ class StudentManagementApp(ctk.CTk):
                 self.rating_tree.delete(row)
 
             for idx, r in enumerate(students_rating, 1):
-                row_tag = f"st_{r['table_name']}_{r['student_id']}"
-                self.rating_tree.insert("", "end", values=(idx, r["full_name"], r["group_name"], r["total"], "✏ Керувати балами"), tags=(row_tag,))
+                self.rating_tree.insert("", "end", values=(idx, r["full_name"], r["group_name"], r["total"]))
 
         except Exception as e:
-            messagebox.showerror("Помилка рейтингу", str(e))
-
-    def on_rating_double_click(self, event):
-        selected_item = self.rating_tree.selection()
-        if not selected_item:
-            return
-
-        item_data = self.rating_tree.item(selected_item)
-        values = item_data['values']
-        student_name = values[1]
-        group_name = values[2]
-
-        try:
-            conn = self.get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT table_name FROM groups_registry WHERE group_name = %s;", (group_name,))
-            reg = cursor.fetchone()
-            if not reg:
-                cursor.close()
-                conn.close()
-                return
-            tbl_name = reg[0]
-
-            cursor.execute(f"SELECT id FROM {tbl_name} WHERE full_name = %s;", (student_name,))
-            st_row = cursor.fetchone()
-            if not st_row:
-                cursor.close()
-                conn.close()
-                return
-            st_id = st_row[0]
-
-            cursor.execute("""
-                SELECT a.id, r.order_number, r.event_title, a.points_awarded 
-                FROM student_achievements a
-                JOIN rewards_orders r ON a.order_id = r.id
-                WHERE a.group_table_name = %s AND a.student_id = %s;
-            """, (tbl_name, st_id))
-            achievements = cursor.fetchall()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            messagebox.showerror("Помилка", str(e))
-            return
-
-        edit_rt_win = ctk.CTkToplevel(self)
-        edit_rt_win.title(f"Керування балами: {student_name}")
-        edit_rt_win.geometry("550x380")
-        edit_rt_win.grab_set()
-
-        ctk.CTkLabel(edit_rt_win, text=f"Досягнення студента: {student_name}", font=("Arial", 12, "bold")).pack(padx=20, pady=(15, 5))
-
-        ach_frame = ctk.CTkFrame(edit_rt_win)
-        ach_frame.pack(padx=20, pady=5, fill="both", expand=True)
-
-        ach_tree = ttk.Treeview(ach_frame, columns=("ach_id", "ord", "title", "pts"), show="headings", height=5)
-        ach_tree.heading("ach_id", text="ID")
-        ach_tree.heading("ord", text="Наказ")
-        ach_tree.heading("title", text="Захід")
-        ach_tree.heading("pts", text="Бали")
-        ach_tree.column("ach_id", width=40, anchor="center")
-        ach_tree.column("ord", width=80, anchor="center")
-        ach_tree.column("title", width=250, anchor="w")
-        ach_tree.column("pts", width=60, anchor="center")
-        ach_tree.pack(side="left", fill="both", expand=True)
-
-        for ach in achievements:
-            ach_tree.insert("", "end", values=ach)
-
-        def delete_selected_achievement():
-            sel_ach = ach_tree.selection()
-            if not sel_ach:
-                messagebox.showwarning("Увага", "Оберіть досягнення у списку для видалення!")
-                return
-            if not messagebox.askyesno("Підтвердження", "Видалити це досягнення та зняти бали зі студента?"):
-                return
-            ach_vals = ach_tree.item(sel_ach)['values']
-            ach_id = ach_vals[0]
-            try:
-                conn = self.get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM student_achievements WHERE id = %s;", (ach_id,))
-                conn.commit()
-                cursor.close()
-                conn.close()
-                messagebox.showinfo("Успіх", "Досягнення видалено!")
-                edit_rt_win.destroy()
-                self.load_rating_data()
-            except Exception as e:
-                messagebox.showerror("Помилка", str(e))
-
-        del_ach_btn = ctk.CTkButton(edit_rt_win, text="🗑 Видалити вибране досягнення", fg_color="#c92a2a", command=delete_selected_achievement)
-        del_ach_btn.pack(padx=20, pady=15)
+            pass
 
 if __name__ == "__main__":
     app = StudentManagementApp()

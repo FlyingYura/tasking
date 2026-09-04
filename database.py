@@ -101,8 +101,42 @@ def get_all_students_flat(cursor):
             all_students.append({"table": tbl, "id": r[0], "full_name": r[1], "group_name": r[2]})
     return all_students
 
+def get_all_db_tables(cursor):
+    """Отримує список усіх користувацьких таблиць у базі даних."""
+    cursor.execute("""
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        ORDER BY table_name;
+    """)
+    return [row[0] for row in cursor.fetchall()]
+
+def get_table_data(cursor, table_name):
+    """Отримує колонки та всі рядки довільної таблиці."""
+    cursor.execute(f"SELECT * FROM {table_name};")
+    columns = [desc[0] for desc in cursor.description]
+    rows = cursor.fetchall()
+    return columns, rows
+
+def update_table_cell(cursor, table_name, column_name, new_value, row_id):
+    """Оновлює конкретне поле в довільній таблиці за її ID."""
+    cursor.execute(f"""
+        UPDATE {table_name}
+        SET {column_name} = %s
+        WHERE id = %s;
+    """, (new_value, row_id))
+
+def delete_table_row(cursor, table_name, row_id):
+    """Видаляє рядок з довільної таблиці за ID."""
+    cursor.execute(f"DELETE FROM {table_name} WHERE id = %s;", (row_id,))
+
+def drop_entire_table(cursor, table_name):
+    """Повністю видаляє таблицю з бази даних (із каскадним видаленням залежностей)."""
+    # Якщо видаляється таблиця групи, також видаляємо її з реєстру груп
+    cursor.execute("DELETE FROM groups_registry WHERE table_name = %s;", (table_name,))
+    cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+
 def clear_rewards_and_ratings(cursor):
-    """Очищає лише накази про нагородження та нараховані бали студентів, залишаючи самі групи незмінними."""
     init_core_registry(cursor)
     cursor.execute("TRUNCATE TABLE student_achievements, rewards_orders RESTART IDENTITY CASCADE;")
 
