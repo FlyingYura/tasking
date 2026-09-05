@@ -24,6 +24,33 @@ DEFAULT_STOP_PHRASES = [
     "зараховані на курс",
 ]
 
+# Службові слова, які майже завжди означають "це назва закладу/підрозділу,
+# а не ім'я людини" — навіть якщо решта комірки виглядає як 2+ слова кирилицею.
+# Список загальний (не прив'язаний до назви одного конкретного коледжу),
+# тому працює для будь-якого навчального закладу без правок коду.
+INSTITUTION_KEYWORDS = [
+    "коледж", "університет", "інститут", "технікум", "ліцей", "гімназія",
+    "академія", "факультет", "кафедра", "відділення", "закладу", "заклад",
+]
+
+# Справжнє ПІБ — це РІВНО 2 або 3 слова, і КОЖНЕ з них починається з великої
+# літери (Прізвище, Ім'я, По батькові). Назва закладу такого шаблону майже
+# ніколи не утворює: службові слова в ній зазвичай пишуться з малої літери
+# ("...фаховий коледж"), тому такий суворіший патерн природно відсіює
+# назви закладів, а не лише конкретну одну назву.
+_FULL_NAME_PATTERN = re.compile(
+    r"^[А-ЯІЇЄҐ][а-яіїєґ'’\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’\-]+){1,2}$"
+)
+
+
+def _looks_like_full_name(text):
+    """Перевіряє, чи схожий текст комірки на справжнє ПІБ, а не на назву
+    закладу, підрозділу чи інший службовий рядок таблиці."""
+    stripped = re.sub(r"\s*25\+\s*", " ", text)
+    stripped = re.sub(r"^\d+[.\s]+", "", stripped).strip()
+    stripped = " ".join(stripped.split())
+    return bool(_FULL_NAME_PATTERN.match(stripped))
+
 
 def _convert_doc_to_docx(file_path):
     try:
@@ -123,8 +150,11 @@ def parse_students_tables(file_path, stop_phrases=None):
             text_lower = text.lower()
             if any(phrase in text_lower for phrase in stop_phrases):
                 continue
-            words = re.findall(r"[А-ЯІЇЄҐа-яіїєґ]{2,}", text)
-            if len(words) >= 2 and not any(kw in text_lower for kw in ["куратор", "навч", "наказ", "рік"]):
+            if any(kw in text_lower for kw in INSTITUTION_KEYWORDS):
+                continue
+            if any(kw in text_lower for kw in ["куратор", "навч", "наказ", "рік"]):
+                continue
+            if _looks_like_full_name(text):
                 full_name = text
                 name_idx = idx
                 break
