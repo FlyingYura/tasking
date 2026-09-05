@@ -1,4 +1,9 @@
 customtkinter==5.2.2
 psycopg2-binary==2.9.9
 python-docx==1.1.0
-pywin32==312
+openpyxl==3.1.5
+
+# Потрібен лише на Windows для читання старих файлів .doc через MS Word.
+# На Linux/macOS просто не встановлюйте цей пакет — конвертуйте .doc у .docx
+# вручну (Word/LibreOffice: "Зберегти як" → .docx) перед імпортом.
+pywin32==312 ; sys_platform == 'win32'
