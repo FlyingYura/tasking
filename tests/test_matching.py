@@ -6,7 +6,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import matching
-from parsers.reward_parser import parse_reward_order, DEFAULT_POINTS_LEVELS, _determine_level
+from parsers.reward_parser import parse_reward_order, DEFAULT_POINTS_LEVELS, _determine_level, _detect_order_kind
+from scoring import applied_points
 from parsers.students_parser import parse_students_tables
 
 
@@ -107,6 +108,45 @@ class TestRewardLevels(unittest.TestCase):
         self.assertTrue(all(s["group_name"] for s in result["students"]))
         self.assertIn("вайді юліані", names)
         self.assertIn("писко анні", names)
+        self.assertEqual(result.get("order_kind"), "reward")
+
+
+class TestReprimandOrders(unittest.TestCase):
+    def test_detect_reprimand_from_order_text(self):
+        self.assertEqual(_detect_order_kind("оголосити догану студентам коледжу"), "reprimand")
+        self.assertEqual(_detect_order_kind("наказ про подяку студентам коледжу"), "reward")
+
+    def test_reprimand_does_not_subtract_from_zero(self):
+        self.assertEqual(applied_points("reprimand", 0.5, 0), 0.0)
+
+    def test_reprimand_subtracts_half_point(self):
+        self.assertEqual(applied_points("reprimand", 0.5, 3), -0.5)
+
+    def test_reprimand_does_not_go_below_zero(self):
+        self.assertEqual(applied_points("reprimand", 0.5, 0.3), -0.3)
+
+    def test_parse_reprimand_order_sets_kind_and_points(self):
+        from parsers import reward_parser
+
+        class FakeParagraph:
+            def __init__(self, text):
+                self.text = text
+
+        class FakeDoc:
+            def __init__(self, _path):
+                self.paragraphs = [
+                    FakeParagraph("Наказ № 44 від 11.09.2026"),
+                    FakeParagraph("Оголосити догану за порушення правил внутрішнього розпорядку:"),
+                    FakeParagraph("Бойчук Назар – група ОР-21"),
+                ]
+
+        with mock.patch.object(reward_parser, "Document", FakeDoc):
+            result = reward_parser.parse_reward_order("fake.docx")
+
+        self.assertEqual(result["order_kind"], "reprimand")
+        self.assertEqual(result["level_type"], "Догана")
+        self.assertEqual(result["points"], 0.5)
+        self.assertEqual(result["students"][0]["full_name"], "Бойчук Назар")
 
 
 class TestStudentsParser(unittest.TestCase):

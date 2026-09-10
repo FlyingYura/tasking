@@ -103,7 +103,7 @@ class Database:
                     order_date VARCHAR(50) NOT NULL,
                     event_title TEXT NOT NULL,
                     level_type VARCHAR(50) NOT NULL,
-                    default_points INT NOT NULL,
+                    default_points NUMERIC(8,2) NOT NULL,
                     UNIQUE(order_number, order_date)
                 );
             """)
@@ -112,13 +112,16 @@ class Database:
                     id SERIAL PRIMARY KEY,
                     student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
                     order_id INT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-                    points_awarded INT NOT NULL,
+                    points_awarded NUMERIC(8,2) NOT NULL,
                     UNIQUE(student_id, order_id)
                 );
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_students_group ON students(group_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_achievements_student ON achievements(student_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_achievements_order ON achievements(order_id);")
+            # Існуючі бази створювались з INT; дробові бали доган (0.5) потребують NUMERIC.
+            cur.execute("ALTER TABLE orders ALTER COLUMN default_points TYPE NUMERIC(8,2);")
+            cur.execute("ALTER TABLE achievements ALTER COLUMN points_awarded TYPE NUMERIC(8,2);")
 
     # -- групи / студенти ---------------------------------------------------
     def upsert_group(self, name, study_year, curator):
@@ -215,7 +218,20 @@ class Database:
                     GROUP BY s.id, s.full_name, g.name
                     ORDER BY total DESC, s.full_name ASC;
                 """)
-            return [{"full_name": r[0], "group_name": r[1], "total": r[2]} for r in cur.fetchall()]
+            return [
+                {"full_name": r[0], "group_name": r[1], "total": float(r[2] or 0)}
+                for r in cur.fetchall()
+            ]
+
+    def get_student_totals(self):
+        """Поточний рейтинг кожного студента: {student_id: total}."""
+        with self.cursor() as cur:
+            cur.execute("""
+                SELECT student_id, COALESCE(SUM(points_awarded), 0)
+                FROM achievements
+                GROUP BY student_id;
+            """)
+            return {r[0]: float(r[1] or 0) for r in cur.fetchall()}
 
     def get_student_history(self, student_id):
         with self.cursor() as cur:
@@ -240,11 +256,22 @@ class Database:
     def get_all_db_tables(self):
         return list(ALLOWED_TABLES.keys())
 
-    def get_table_data(self, table_name):
+    def get_table_data(self, table_name, group_id=None):
         if table_name not in ALLOWED_TABLES:
             raise DatabaseError(f"Таблиця '{table_name}' недоступна для перегляду.")
         with self.cursor() as cur:
-            cur.execute(f"SELECT * FROM {table_name} ORDER BY id;")  # nosec: table_name whitelisted above
+            if table_name == "students":
+                sql = """
+                    SELECT s.id, s.full_name, g.name AS group_name, s.funding, s.note
+                    FROM students s
+                    JOIN groups g ON g.id = s.group_id
+                """
+                if group_id:
+                    cur.execute(sql + " WHERE s.group_id = %s ORDER BY s.full_name;", (group_id,))
+                else:
+                    cur.execute(sql + " ORDER BY g.name, s.full_name;")
+            else:
+                cur.execute(f"SELECT * FROM {table_name} ORDER BY id;")  # nosec: table_name whitelisted above
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
             return columns, rows

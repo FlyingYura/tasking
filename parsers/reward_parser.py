@@ -29,6 +29,13 @@ DEFAULT_POINTS_LEVELS = [
     {"keywords": [], "label": "Міський / Місцевий", "points": 1},
 ]
 
+DEFAULT_REPRIMAND_LEVELS = [
+    {"keywords": ["доган"], "label": "Догана", "points": 0.5},
+]
+
+REPRIMAND_KEYWORDS = ("доган",)
+REWARD_KEYWORDS = ("подяк", "нагород")
+
 
 def _convert_doc_to_docx(file_path):
     try:
@@ -62,8 +69,17 @@ def _determine_level(text_lower, points_levels):
     return "Не визначено", 1
 
 
-def parse_reward_order(file_path, points_levels=None):
+def _detect_order_kind(text_lower):
+    reprimand_hits = sum(text_lower.count(kw) for kw in REPRIMAND_KEYWORDS)
+    reward_hits = sum(text_lower.count(kw) for kw in REWARD_KEYWORDS)
+    if reprimand_hits > 0 and reprimand_hits >= reward_hits:
+        return "reprimand"
+    return "reward"
+
+
+def parse_reward_order(file_path, points_levels=None, reprimand_levels=None):
     points_levels = points_levels or DEFAULT_POINTS_LEVELS
+    reprimand_levels = reprimand_levels or DEFAULT_REPRIMAND_LEVELS
     target_path = file_path
     temp_created = False
 
@@ -89,12 +105,19 @@ def parse_reward_order(file_path, points_levels=None):
     date_match = re.search(r"(\d{2}\.\d{2}\.\d{4})", full_text)
     order_date = date_match.group(1) if date_match else "Не вказана"
 
-    level_type, points = _determine_level(full_text.lower(), points_levels)
+    text_lower = full_text.lower()
+    order_kind = _detect_order_kind(text_lower)
+    levels = reprimand_levels if order_kind == "reprimand" else points_levels
+    level_type, points = _determine_level(text_lower, levels)
 
-    event_title = "Подяка за активну участь"
+    event_title = "Догана" if order_kind == "reprimand" else "Подяка за активну участь"
     for p in doc.paragraphs:
         txt = p.text.strip()
-        if any(kw in txt.lower() for kw in ["про підсумки", "свята", "конкурс", "наук"]):
+        if order_kind == "reprimand":
+            if any(kw in txt.lower() for kw in ["доган", "порушен", "дисциплін"]):
+                event_title = txt
+                break
+        elif any(kw in txt.lower() for kw in ["про підсумки", "свята", "конкурс", "наук"]):
             event_title = txt
             break
 
@@ -135,7 +158,7 @@ def parse_reward_order(file_path, points_levels=None):
         for col in cols:
             col = col.strip()
             if re.match(r"^[А-ЯІЇЄҐ][а-яіїєґ]+\s+[А-ЯІЇЄҐ][а-яіїєґ]+$", col):
-                if not any(w in col.lower() for w in ["директор", "заступник", "коледж", "наказ", "призначаю", "викладач", "подяку"]):
+                if not any(w in col.lower() for w in ["директор", "заступник", "коледж", "наказ", "призначаю", "викладач", "подяку", "доган"]):
                     if not any(s["full_name"].lower() == col.lower() for s in students):
                         students.append({"full_name": col, "group_name": None})
 
@@ -145,5 +168,6 @@ def parse_reward_order(file_path, points_levels=None):
         "event_title": event_title,
         "level_type": level_type,
         "points": points,
+        "order_kind": order_kind,
         "students": students,
     }
