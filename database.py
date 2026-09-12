@@ -35,7 +35,7 @@ logger = logging.getLogger("app.database")
 ALLOWED_TABLES = {
     "groups": ["name", "study_year", "curator"],
     "students": ["full_name", "funding", "note"],
-    "orders": ["order_number", "order_date", "event_title", "level_type", "default_points"],
+    "orders": ["order_number", "order_date", "level_type", "default_points"],
     "achievements": ["points_awarded"],
 }
 
@@ -45,6 +45,8 @@ class DatabaseError(Exception):
 
 
 class Database:
+    read_only = False
+
     def __init__(self, host, port, dbname, user, password):
         self.conn_params = dict(host=host, port=port, dbname=dbname, user=user, password=password)
         self._conn = None
@@ -335,7 +337,7 @@ class Database:
                     cur.execute(sql + " ORDER BY g.name, s.full_name;")
             elif table_name == "orders":
                 cur.execute("""
-                    SELECT id, order_number, order_date, event_title, level_type, default_points,
+                    SELECT id, order_number, order_date, level_type, default_points,
                            COALESCE(source_filename, '—') AS source_filename
                     FROM orders
                     ORDER BY id;
@@ -415,19 +417,7 @@ class Database:
 
     def restore_backup(self, file_path):
         """Відновлює дані з .bak, повністю замінюючи поточний вміст таблиць."""
-        with zipfile.ZipFile(file_path, "r") as zf:
-            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-            if manifest.get("format") not in (None, "docflow-backup"):
-                raise DatabaseError("Файл не є копією DocFlow.")
-            file_blobs = {}
-            for name in zf.namelist():
-                if name.startswith("files/") and not name.endswith("/"):
-                    part = name.split("/", 1)[1]
-                    order_id_str = part.split("_", 1)[0]
-                    try:
-                        file_blobs[int(order_id_str)] = zf.read(name)
-                    except ValueError:
-                        continue
+        manifest, file_blobs = read_backup_archive(file_path)
 
         with self.cursor() as cur:
             cur.execute("TRUNCATE TABLE achievements, orders, students, groups RESTART IDENTITY CASCADE;")
@@ -464,3 +454,193 @@ class Database:
                 max_id = cur.fetchone()[0]
                 if max_id:
                     cur.execute(f"SELECT setval('{table}_id_seq', %s, true);", (max_id,))  # nosec: whitelist
+
+
+def read_backup_archive(file_path):
+    with zipfile.ZipFile(file_path, "r") as zf:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        if manifest.get("format") not in (None, "docflow-backup"):
+            raise DatabaseError("Файл не є копією DocFlow.")
+        file_blobs = {}
+        for name in zf.namelist():
+            if name.startswith("files/") and not name.endswith("/"):
+                part = name.split("/", 1)[1]
+                order_id_str = part.split("_", 1)[0]
+                try:
+                    file_blobs[int(order_id_str)] = zf.read(name)
+                except ValueError:
+                    continue
+    return manifest, file_blobs
+
+
+def load_backup_snapshot(file_path):
+    manifest, files = read_backup_archive(file_path)
+    return SnapshotDatabase(manifest, files, file_path)
+
+
+class SnapshotDatabase:
+    """Прочитана з .bak копія: ті самі методи читання, без запису в PostgreSQL."""
+
+    read_only = True
+
+    def __init__(self, manifest, files, source_path):
+        self.source_path = source_path
+        self.groups = list(manifest.get("groups") or [])
+        self.students = list(manifest.get("students") or [])
+        self.orders = list(manifest.get("orders") or [])
+        self.achievements = list(manifest.get("achievements") or [])
+        self.files = files or {}
+        self._groups_by_id = {g["id"]: g for g in self.groups}
+        self._students_by_id = {s["id"]: s for s in self.students}
+        self._orders_by_id = {o["id"]: o for o in self.orders}
+
+    def is_connected(self):
+        return True
+
+    def close(self):
+        return None
+
+    def _readonly(self):
+        raise DatabaseError("Відкрита копія бази доступна лише для перегляду.")
+
+    def upsert_group(self, *args, **kwargs):
+        self._readonly()
+
+    def upsert_student(self, *args, **kwargs):
+        self._readonly()
+
+    def upsert_order(self, *args, **kwargs):
+        self._readonly()
+
+    def add_achievement(self, *args, **kwargs):
+        self._readonly()
+
+    def update_table_cell(self, *args, **kwargs):
+        self._readonly()
+
+    def delete_table_row(self, *args, **kwargs):
+        self._readonly()
+
+    def clear_rewards_and_ratings(self):
+        self._readonly()
+
+    def clear_entire_database(self):
+        self._readonly()
+
+    def restore_backup(self, *args, **kwargs):
+        self._readonly()
+
+    def save_backup(self, *args, **kwargs):
+        self._readonly()
+
+    def get_groups(self):
+        return [(g["id"], g["name"], g["study_year"], g["curator"]) for g in sorted(self.groups, key=lambda x: x["name"])]
+
+    def get_students_by_group(self, group_id):
+        rows = [s for s in self.students if s["group_id"] == group_id]
+        rows.sort(key=lambda s: s["full_name"])
+        return [(s["id"], s["full_name"], s.get("funding", "К"), s.get("note", "—")) for s in rows]
+
+    def get_all_students_flat(self):
+        result = []
+        for s in self.students:
+            group = self._groups_by_id.get(s["group_id"], {})
+            result.append({
+                "id": s["id"],
+                "full_name": s["full_name"],
+                "group_name": group.get("name", ""),
+                "group_id": s["group_id"],
+            })
+        result.sort(key=lambda r: r["full_name"])
+        return result
+
+    def get_rating(self, group_id=None):
+        totals = {}
+        for a in self.achievements:
+            totals[a["student_id"]] = totals.get(a["student_id"], 0) + float(a.get("points_awarded") or 0)
+        rows = []
+        for s in self.students:
+            if group_id and s["group_id"] != group_id:
+                continue
+            group = self._groups_by_id.get(s["group_id"], {})
+            rows.append({
+                "student_id": s["id"],
+                "full_name": s["full_name"],
+                "group_name": group.get("name", ""),
+                "total": max(0.0, totals.get(s["id"], 0.0)),
+            })
+        rows.sort(key=lambda r: (-r["total"], r["full_name"]))
+        return rows
+
+    def get_student_history(self, student_id):
+        items = []
+        for a in self.achievements:
+            if a["student_id"] != student_id:
+                continue
+            order = self._orders_by_id.get(a["order_id"], {})
+            items.append({
+                "order_id": order.get("id", a["order_id"]),
+                "order_number": order.get("order_number"),
+                "order_date": order.get("order_date"),
+                "event_title": order.get("event_title") or "—",
+                "level_type": order.get("level_type"),
+                "points": float(a.get("points_awarded") or 0),
+                "source_filename": order.get("source_filename"),
+                "has_file": a["order_id"] in self.files or bool(order.get("source_filename")),
+            })
+            items[-1]["has_file"] = a["order_id"] in self.files
+        items.sort(key=lambda x: (x.get("order_date") or "", x.get("order_id") or 0), reverse=True)
+        return items
+
+    def get_achievement_details(self):
+        rows = []
+        for a in self.achievements:
+            student = self._students_by_id.get(a["student_id"], {})
+            group = self._groups_by_id.get(student.get("group_id"), {})
+            order = self._orders_by_id.get(a["order_id"], {})
+            rows.append({
+                "student_id": a["student_id"],
+                "full_name": student.get("full_name", ""),
+                "group_name": group.get("name", ""),
+                "order_number": order.get("order_number"),
+                "order_date": order.get("order_date"),
+                "event_title": order.get("event_title") or "—",
+                "level_type": order.get("level_type"),
+                "points": float(a.get("points_awarded") or 0),
+                "source_filename": order.get("source_filename"),
+            })
+        rows.sort(key=lambda r: (r["full_name"], r.get("order_date") or ""))
+        return rows
+
+    def get_order_attachment(self, order_id):
+        order = self._orders_by_id.get(int(order_id), {})
+        blob = self.files.get(int(order_id))
+        return order.get("source_filename"), blob
+
+    def get_all_db_tables(self):
+        return list(ALLOWED_TABLES.keys())
+
+    def get_table_data(self, table_name, group_id=None):
+        if table_name not in ALLOWED_TABLES:
+            raise DatabaseError(f"Таблиця '{table_name}' недоступна для перегляду.")
+        if table_name == "groups":
+            columns = ["id", "name", "study_year", "curator"]
+            rows = [(g["id"], g["name"], g["study_year"], g["curator"]) for g in self.groups]
+        elif table_name == "students":
+            columns = ["id", "full_name", "group_name", "funding", "note"]
+            rows = []
+            for s in self.students:
+                if group_id and s["group_id"] != group_id:
+                    continue
+                group = self._groups_by_id.get(s["group_id"], {})
+                rows.append((s["id"], s["full_name"], group.get("name", ""), s.get("funding", "К"), s.get("note", "—")))
+        elif table_name == "orders":
+            columns = ["id", "order_number", "order_date", "level_type", "default_points", "source_filename"]
+            rows = [
+                (o["id"], o["order_number"], o["order_date"], o["level_type"], o.get("default_points"), o.get("source_filename") or "—")
+                for o in self.orders
+            ]
+        else:
+            columns = ["id", "student_id", "order_id", "points_awarded"]
+            rows = [(a["id"], a["student_id"], a["order_id"], a.get("points_awarded")) for a in self.achievements]
+        return columns, rows

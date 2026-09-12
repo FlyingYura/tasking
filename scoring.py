@@ -35,13 +35,12 @@ def applied_points(order_kind, configured_points, current_total=0):
 
 
 def format_achievement_line(item):
-    """Короткий рядок для експорту / підказок: «№12 від 01.09.2026: підстава (+1)»."""
+    """Короткий рядок: «№12 від 01.09.2026 (+1)»."""
     number = item.get("order_number") or "Б/Н"
     date = item.get("order_date") or ""
-    title = (item.get("event_title") or "").strip() or "—"
     pts = float(item.get("points") or 0)
     pts_text = format_points(pts)
     if pts > 0:
         pts_text = f"+{pts_text}"
     date_part = f" від {date}" if date and date != "Не вказана" else ""
-    return f"№{number}{date_part}: {title} ({pts_text})"
+    return f"№{number}{date_part} ({pts_text})"

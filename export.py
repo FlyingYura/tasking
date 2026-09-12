@@ -137,8 +137,8 @@ def _fill_student_sheet(ws, title, headers, rows, numbered=True):
 
 
 def _fill_details_sheet(ws, detail_rows):
-    headers = ["ПІБ студента", "Група", "Номер наказу", "Дата", "Підстава (за що)", "Рівень", "Бали", "Файл наказу"]
-    ws.merge_cells("A1:H1")
+    headers = ["ПІБ студента", "Група", "Номер наказу", "Дата", "Рівень", "Бали", "Файл наказу"]
+    ws.merge_cells("A1:G1")
     ws["A1"] = "Деталі нарахувань: кожен рядок — одна подяка або догана"
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([])
@@ -153,7 +153,6 @@ def _fill_details_sheet(ws, detail_rows):
             item.get("group_name"),
             item.get("order_number"),
             item.get("order_date"),
-            item.get("event_title"),
             item.get("level_type"),
             _normalize_total(item.get("points")),
             item.get("source_filename") or "—",
@@ -165,11 +164,11 @@ def _fill_details_sheet(ws, detail_rows):
             if idx % 2 == 0:
                 cell.fill = stripe
 
-    for col, width in zip(range(1, 9), (36, 14, 16, 14, 50, 22, 10, 32)):
+    for col, width in zip(range(1, 8), (36, 14, 16, 14, 22, 10, 32)):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = "A4"
     if detail_rows:
-        ws.auto_filter.ref = f"A3:H{3 + len(detail_rows)}"
+        ws.auto_filter.ref = f"A3:G{3 + len(detail_rows)}"
 
 
 def export_rating_to_xlsx(rating_rows, file_path, detail_rows=None):
@@ -184,8 +183,8 @@ def export_rating_to_xlsx(rating_rows, file_path, detail_rows=None):
     overall.title = _safe_sheet_name("Загальний рейтинг", used)
     _fill_student_sheet(
         overall,
-        "Загальний рейтинг (за балами)",
-        ["Місце", "ПІБ студента", "Група", "Загалом балів", "Накази / підстави"],
+        "Загальний рейтинг",
+        ["Місце", "ПІБ студента", "Група", "Загалом балів", "Накази"],
         overall_rows,
         numbered=True,
     )
@@ -199,8 +198,8 @@ def export_rating_to_xlsx(rating_rows, file_path, detail_rows=None):
         sheet = wb.create_sheet(_safe_sheet_name(group_name, used))
         _fill_student_sheet(
             sheet,
-            f"Група {group_name} (за алфавітом)",
-            ["№", "ПІБ студента", "Група", "Загалом балів", "Накази / підстави"],
+            f"Група {group_name}",
+            ["№", "ПІБ студента", "Група", "Загалом балів", "Накази"],
             alpha,
             numbered=True,
         )

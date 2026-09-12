@@ -109,17 +109,7 @@ def parse_reward_order(file_path, points_levels=None, reprimand_levels=None):
     order_kind = _detect_order_kind(text_lower)
     levels = reprimand_levels if order_kind == "reprimand" else points_levels
     level_type, points = _determine_level(text_lower, levels)
-
-    event_title = "Догана" if order_kind == "reprimand" else "Подяка за активну участь"
-    for p in doc.paragraphs:
-        txt = p.text.strip()
-        if order_kind == "reprimand":
-            if any(kw in txt.lower() for kw in ["доган", "порушен", "дисциплін"]):
-                event_title = txt
-                break
-        elif any(kw in txt.lower() for kw in ["про підсумки", "свята", "конкурс", "наук"]):
-            event_title = txt
-            break
+    event_title = "—"
 
     students = []
     lines = full_text.split("\n")

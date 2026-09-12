@@ -45,8 +45,9 @@ class TestRatingExport(unittest.TestCase):
         self.assertEqual(wb["ЕК-11"]["B4"].value, "Іванов Іван")
         self.assertEqual(wb["ЕК-11"]["B5"].value, "Петренко Марія")
         self.assertIn("№12", wb["ЕК-11"]["E5"].value)
+        self.assertNotIn("Подяка", wb["ЕК-11"]["E5"].value)
         self.assertEqual(wb["Деталі нарахувань"]["C4"].value, "12")
-        self.assertEqual(wb["Деталі нарахувань"]["H4"].value, "nakaz.docx")
+        self.assertEqual(wb["Деталі нарахувань"]["G4"].value, "nakaz.docx")
 
     def test_sheet_names_are_sanitized(self):
         used = set()

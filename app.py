@@ -38,7 +38,6 @@ COLUMN_LABELS = {
     "curator": "Куратор",
     "order_number": "Номер наказу",
     "order_date": "Дата",
-    "event_title": "Захід / підстава",
     "level_type": "Рівень",
     "default_points": "Бали наказу",
     "source_filename": "Файл наказу",
@@ -116,104 +115,77 @@ def run_async(widget, work_fn, on_success=None, on_error=None):
 
 
 class SettingsDialog(ctk.CTkToplevel):
-    """Діалог налаштувань: параметри підключення до БД та рівні балів.
-    Раніше поля host/port/dbname/user/password були завжди видимі
-    у верхній панелі головного вікна — незручно й зайве для працівника
-    деканату, який відкриває програму щодня. Тепер вони ховаються тут
-    і підвантажуються автоматично при старті."""
+    """Одне вікно налаштувань: БД, подяки, догани, тема."""
 
     def __init__(self, master, on_saved):
         super().__init__(master)
         self.title("Налаштування")
-        self.geometry("580x620")
-        self.minsize(520, 520)
+        self.geometry("560x720")
+        self.minsize(520, 560)
         self.grab_set()
         self.on_saved = on_saved
         self.cfg = cfg.load_config()
-
-        tabs = ctk.CTkTabview(self)
-        tabs.pack(fill="both", expand=True, padx=15, pady=15)
-        tab_ui = tabs.add("Інтерфейс")
-        tab_db = tabs.add("Підключення до БД")
-        tab_levels = tabs.add("Подяки / бали")
-        tab_reprimands = tabs.add("Догани / бали")
-
-        ctk.CTkLabel(tab_ui, text="Тема оформлення", font=("Segoe UI", 14, "bold")).pack(
-            anchor="w", padx=10, pady=(16, 8)
-        )
-        current_theme = self.cfg.get("appearance_mode", "Light")
-        theme_label = "Темна" if current_theme == "Dark" else "Світла"
-        self.theme_var = ctk.StringVar(value=theme_label)
-        self.theme_switch = ctk.CTkSegmentedButton(
-            tab_ui,
-            values=["Світла", "Темна"],
-            variable=self.theme_var,
-            command=self._preview_theme,
-            width=240,
-        )
-        self.theme_switch.pack(anchor="w", padx=10)
-        ctk.CTkLabel(
-            tab_ui,
-            text="Світла тема встановлена за замовчуванням.\nЗміну можна зробити будь-коли — вона збережеться після «Зберегти».",
-            text_color="gray",
-            justify="left",
-        ).pack(anchor="w", padx=10, pady=(8, 0))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=18, pady=12)
+
+        ctk.CTkLabel(scroll, text="Підключення до бази даних", font=("Segoe UI", 15, "bold")).pack(anchor="w", pady=(4, 8))
         db = self.cfg["db"]
         self.entries = {}
+        grid = ctk.CTkFrame(scroll, fg_color="transparent")
+        grid.pack(fill="x")
         for row, (key, label) in enumerate([
             ("host", "Хост"), ("port", "Порт"), ("dbname", "Назва БД"),
             ("user", "Користувач"), ("password", "Пароль"),
         ]):
-            ctk.CTkLabel(tab_db, text=label).grid(row=row, column=0, padx=10, pady=8, sticky="w")
+            ctk.CTkLabel(grid, text=label).grid(row=row, column=0, padx=(0, 12), pady=6, sticky="w")
             show = "*" if key == "password" else ""
-            entry = ctk.CTkEntry(tab_db, width=240, show=show)
+            entry = ctk.CTkEntry(grid, width=280, show=show)
             entry.insert(0, str(db.get(key, "")))
-            entry.grid(row=row, column=1, padx=10, pady=8)
+            entry.grid(row=row, column=1, pady=6, sticky="w")
             self.entries[key] = entry
-
         ctk.CTkLabel(
-            tab_db,
-            text="Пароль зберігається локально у файлі профілю користувача.\n"
-                 "Для спільного/публічного комп'ютера рекомендовано\n"
-                 "не зберігати пароль і вводити його щоразу.",
-            text_color="gray", justify="left",
-        ).grid(row=6, column=0, columnspan=2, padx=10, pady=(15, 0), sticky="w")
+            scroll,
+            text="Пароль зберігається локально у файлі профілю. На спільному комп'ютері краще лишити поле порожнім.",
+            text_color="gray", justify="left", wraplength=480,
+        ).pack(anchor="w", pady=(4, 16))
 
-        ctk.CTkLabel(tab_levels, text="Ключові слова у тексті наказу → рівень і бали подяки:").pack(
-            anchor="w", padx=10, pady=(10, 5)
-        )
+        ctk.CTkLabel(scroll, text="Подяки / бали", font=("Segoe UI", 15, "bold")).pack(anchor="w")
+        ctk.CTkLabel(scroll, text="Ключові слова в тексті наказу → рівень і бали", text_color="gray").pack(anchor="w", pady=(0, 6))
         self.level_rows = []
-        levels_frame = ctk.CTkFrame(tab_levels, fg_color="transparent")
-        levels_frame.pack(fill="x", padx=10)
+        levels_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        levels_frame.pack(fill="x")
         for level in self.cfg["points_levels"]:
             self._add_level_row(self.level_rows, levels_frame, level)
-
         ctk.CTkButton(
-            tab_levels, text="+ Додати рівень",
+            scroll, text="+ Додати рівень подяки", width=180,
             command=lambda: self._add_level_row(self.level_rows, levels_frame, {"keywords": [], "label": "", "points": 1}),
-        ).pack(padx=10, pady=10, anchor="w")
+        ).pack(anchor="w", pady=(8, 16))
 
-        ctk.CTkLabel(
-            tab_reprimands,
-            text="Ключові слова у тексті наказу → рівень і бали догани\n"
-                 "(віднімаються лише якщо в студента вже є бали в рейтингу):",
-            justify="left",
-        ).pack(anchor="w", padx=10, pady=(10, 5))
+        ctk.CTkLabel(scroll, text="Догани / бали", font=("Segoe UI", 15, "bold")).pack(anchor="w")
+        ctk.CTkLabel(scroll, text="Значення, яке віднімається (навіть якщо зараз 0 — щоб пізніша подяка його перекрила).", text_color="gray", wraplength=480, justify="left").pack(anchor="w", pady=(0, 6))
         self.reprimand_rows = []
-        reprimand_frame = ctk.CTkFrame(tab_reprimands, fg_color="transparent")
-        reprimand_frame.pack(fill="x", padx=10)
+        reprimand_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        reprimand_frame.pack(fill="x")
         for level in self.cfg.get("reprimand_levels") or cfg.DEFAULT_CONFIG["reprimand_levels"]:
             self._add_level_row(self.reprimand_rows, reprimand_frame, level)
-
         ctk.CTkButton(
-            tab_reprimands, text="+ Додати рівень",
+            scroll, text="+ Додати рівень догани", width=180,
             command=lambda: self._add_level_row(self.reprimand_rows, reprimand_frame, {"keywords": [], "label": "", "points": 0.5}),
-        ).pack(padx=10, pady=10, anchor="w")
+        ).pack(anchor="w", pady=(8, 16))
 
-        save_btn = ctk.CTkButton(self, text="Зберегти", fg_color="#2b8a3e", command=self.save)
-        save_btn.pack(pady=(0, 15))
+        ctk.CTkLabel(scroll, text="Тема програми", font=("Segoe UI", 15, "bold")).pack(anchor="w", pady=(4, 8))
+        current_theme = self.cfg.get("appearance_mode", "Light")
+        theme_label = "Темна" if current_theme == "Dark" else "Світла"
+        self.theme_var = ctk.StringVar(value=theme_label)
+        self.theme_switch = ctk.CTkSegmentedButton(
+            scroll, values=["Світла", "Темна"], variable=self.theme_var,
+            command=self._preview_theme, width=240,
+        )
+        self.theme_switch.pack(anchor="w")
+
+        ctk.CTkButton(self, text="Зберегти", fg_color="#1d4e89", height=36, command=self.save).pack(pady=(0, 16), padx=18, fill="x")
 
     def _add_level_row(self, rows, parent, level):
         row_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -348,14 +320,14 @@ class StudentHistoryDialog(ctk.CTkToplevel):
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
 
-        columns = ("date", "number", "title", "level", "pts", "file")
+        columns = ("date", "number", "level", "pts", "file")
         self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
         for col, text, w in [
-            ("date", "Дата", 100), ("number", "№ наказу", 110), ("title", "За що / підстава", 280),
-            ("level", "Рівень", 140), ("pts", "Бали", 70), ("file", "Файл", 160),
+            ("date", "Дата", 120), ("number", "№ наказу", 130),
+            ("level", "Рівень", 180), ("pts", "Бали", 80), ("file", "Файл", 200),
         ]:
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, anchor="w" if col in ("title", "file") else "center")
+            self.tree.column(col, width=w, anchor="w" if col == "file" else "center")
         scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -363,7 +335,7 @@ class StudentHistoryDialog(ctk.CTkToplevel):
         self.tree.bind("<Double-1>", lambda _e: self._open_selected())
 
         if not history:
-            self.tree.insert("", "end", values=("", "", "Немає подяк і доган", "", "", ""))
+            self.tree.insert("", "end", values=("", "Немає подяк і доган", "", "", ""))
         else:
             for item in history:
                 pts = format_points(item["points"])
@@ -373,7 +345,6 @@ class StudentHistoryDialog(ctk.CTkToplevel):
                 self.tree.insert("", "end", iid=str(item["order_id"]), values=(
                     item.get("order_date") or "",
                     item.get("order_number") or "",
-                    item.get("event_title") or "",
                     item.get("level_type") or "",
                     pts,
                     filename,
@@ -409,7 +380,9 @@ class StudentManagementApp(ctk.CTk):
 
         self.app_config = cfg.load_config()
         ctk.set_appearance_mode(self.app_config.get("appearance_mode", "Light"))
-        self.db: database.Database | None = None
+        self.db = None
+        self.live_db = None
+        self._viewing_backup = False
 
         self.loaded_data = None
         self.loaded_reward_data = None
@@ -439,6 +412,7 @@ class StudentManagementApp(ctk.CTk):
         mode = mode or self.app_config.get("appearance_mode", "Light")
         ctk.set_appearance_mode(mode)
         apply_treeview_style(self, mode)
+        self._style_sidebar(mode)
         for tree in getattr(self, "_treeviews", []):
             try:
                 tree.tag_configure("odd", background="#f8f9fa" if mode != "Dark" else "#252525")
@@ -446,54 +420,132 @@ class StudentManagementApp(ctk.CTk):
             except tk.TclError:
                 pass
 
+    def _style_sidebar(self, mode):
+        if not hasattr(self, "sidebar"):
+            return
+        dark = mode == "Dark"
+        self.sidebar.configure(fg_color="#141414" if dark else "#152536")
+        self.sidebar_title.configure(text_color="#f8f9fa")
+        self.sidebar_caption.configure(text_color="#adb5bd")
+        for key, btn in getattr(self, "nav_buttons", {}).items():
+            if key == getattr(self, "_active_page", "import"):
+                btn.configure(fg_color="#1d4e89", text_color="#ffffff")
+            else:
+                btn.configure(fg_color="transparent", text_color="#e9ecef")
+
     # -- каркас вікна --------------------------------------------------
     def create_widgets(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
         self._build_menubar()
 
-        top_frame = ctk.CTkFrame(self, corner_radius=8)
-        top_frame.grid(row=0, column=0, padx=16, pady=(12, 8), sticky="ew")
+        self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color="#152536")
+        self.sidebar.grid(row=0, column=0, rowspan=4, sticky="nsw")
+        self.sidebar.grid_propagate(False)
+
+        self.sidebar_title = ctk.CTkLabel(self.sidebar, text="DocFlow", font=("Segoe UI", 22, "bold"), text_color="#ffffff")
+        self.sidebar_title.pack(anchor="w", padx=22, pady=(28, 2))
+        self.sidebar_caption = ctk.CTkLabel(self.sidebar, text="Документообіг", font=("Segoe UI", 12), text_color="#adb5bd")
+        self.sidebar_caption.pack(anchor="w", padx=22, pady=(0, 28))
+
+        self.nav_buttons = {}
+        nav_items = [
+            ("import", "Імпорт"),
+            ("students", "Студенти"),
+            ("rewards", "Накази"),
+            ("rating", "Рейтинг"),
+            ("db", "База даних"),
+        ]
+        for key, label in nav_items:
+            btn = ctk.CTkButton(
+                self.sidebar, text=label, anchor="w", height=40, corner_radius=8,
+                fg_color="transparent", hover_color="#1d4e89", text_color="#e9ecef",
+                font=("Segoe UI", 14), command=lambda k=key: self.show_page(k),
+            )
+            btn.pack(fill="x", padx=12, pady=3)
+            self.nav_buttons[key] = btn
+
+        ctk.CTkFrame(self.sidebar, height=1, fg_color="#2c3e50").pack(fill="x", padx=16, pady=18)
+        ctk.CTkButton(
+            self.sidebar, text="Налаштування", anchor="w", height=36, corner_radius=8,
+            fg_color="transparent", hover_color="#1d4e89", text_color="#e9ecef",
+            command=self.open_settings,
+        ).pack(fill="x", padx=12, pady=2)
+        ctk.CTkButton(
+            self.sidebar, text="Відкрити копію .bak", anchor="w", height=36, corner_radius=8,
+            fg_color="transparent", hover_color="#1d4e89", text_color="#e9ecef",
+            command=self.open_backup_view,
+        ).pack(fill="x", padx=12, pady=2)
+
+        top_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        top_frame.grid(row=0, column=1, padx=18, pady=(12, 4), sticky="ew")
         top_frame.grid_columnconfigure(2, weight=1)
 
         self.status_dot = ctk.CTkLabel(top_frame, text="●", text_color="#c92a2a", font=("Segoe UI", 18))
-        self.status_dot.grid(row=0, column=0, padx=(14, 0), pady=10)
+        self.status_dot.grid(row=0, column=0, padx=(4, 0))
         self.status_label = ctk.CTkLabel(top_frame, text="Немає з'єднання з БД", font=("Segoe UI", 13))
         self.status_label.grid(row=0, column=1, padx=8, sticky="w")
 
         actions = ctk.CTkFrame(top_frame, fg_color="transparent")
-        actions.grid(row=0, column=3, padx=8, pady=8, sticky="e")
-        ctk.CTkButton(actions, text="Оновити", width=100, command=self.refresh_all_views).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="Експорт рейтингу", width=150, command=self.export_rating).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="Копія БД", width=110, command=self.save_database_backup).pack(side="left", padx=4)
-        ctk.CTkButton(actions, text="Налаштування", width=130, command=self.open_settings).pack(side="left", padx=4)
+        actions.grid(row=0, column=3, sticky="e")
+        ctk.CTkButton(actions, text="Оновити", width=100, fg_color="#1d4e89", command=self.refresh_all_views).pack(side="left", padx=4)
+        ctk.CTkButton(actions, text="Експорт рейтингу", width=150, fg_color="#1d4e89", command=self.export_rating).pack(side="left", padx=4)
+        ctk.CTkButton(actions, text="Зберегти копію", width=130, fg_color="#1d4e89", command=self.save_database_backup).pack(side="left", padx=4)
 
-        self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=1, column=0, padx=16, pady=(0, 6), sticky="nsew")
+        self.backup_banner = ctk.CTkFrame(self, fg_color="#fff3bf", corner_radius=6)
+        self.backup_banner.grid(row=1, column=1, padx=18, pady=(0, 4), sticky="ew")
+        self.backup_banner_label = ctk.CTkLabel(
+            self.backup_banner, text="", font=("Segoe UI", 13), text_color="#5c4b00"
+        )
+        self.backup_banner_label.pack(side="left", padx=12, pady=8)
+        ctk.CTkButton(
+            self.backup_banner, text="Закрити копію", width=130, fg_color="#e67700",
+            command=self.close_backup_view,
+        ).pack(side="right", padx=10, pady=6)
+        self.backup_banner.grid_remove()
 
-        self.tab_import = self.tabview.add("Імпорт")
-        self.tab_view_students = self.tabview.add("Студенти")
-        self.tab_rewards = self.tabview.add("Накази")
-        self.tab_rating = self.tabview.add("Рейтинг")
-        self.tab_db = self.tabview.add("База даних")
+        self.content_host = ctk.CTkFrame(self, corner_radius=10)
+        self.content_host.grid(row=2, column=1, padx=18, pady=(0, 8), sticky="nsew")
+        self.content_host.grid_rowconfigure(0, weight=1)
+        self.content_host.grid_columnconfigure(0, weight=1)
+
+        self.pages = {}
+        self.tab_import = self._make_page("import")
+        self.tab_view_students = self._make_page("students")
+        self.tab_rewards = self._make_page("rewards")
+        self.tab_rating = self._make_page("rating")
+        self.tab_db = self._make_page("db")
 
         self.setup_import_tab()
         self.setup_view_students_tab()
         self.setup_rewards_tab()
         self.setup_rating_tab()
         self.setup_db_tab()
+        self.show_page("import")
 
         self.status_bar = ctk.CTkFrame(self, height=32, corner_radius=0)
-        self.status_bar.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+        self.status_bar.grid(row=3, column=1, sticky="ew")
         self.status_hint = ctk.CTkLabel(
             self.status_bar,
-            text="F5 — оновити дані   ·   Накази: подяки та догани розпізнаються автоматично",
+            text="F5 — оновити   ·   Двічі клацніть студента в рейтингу, щоб побачити накази",
             text_color="gray",
             font=("Segoe UI", 12),
         )
         self.status_hint.pack(side="left", padx=16, pady=6)
         self.bind("<F5>", lambda _e: self.refresh_all_views())
+
+    def _make_page(self, key):
+        frame = ctk.CTkFrame(self.content_host, fg_color="transparent")
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.pages[key] = frame
+        return frame
+
+    def show_page(self, name):
+        self._active_page = name
+        self.pages[name].tkraise()
+        self._style_sidebar(self.app_config.get("appearance_mode", "Light"))
 
     def _build_menubar(self):
         menubar = tk.Menu(self)
@@ -501,7 +553,8 @@ class StudentManagementApp(ctk.CTk):
         file_menu.add_command(label="Експорт рейтингу…", command=self.export_rating)
         file_menu.add_separator()
         file_menu.add_command(label="Зберегти копію бази (.bak)…", command=self.save_database_backup)
-        file_menu.add_command(label="Відновити базу з копії (.bak)…", command=self.restore_database_backup)
+        file_menu.add_command(label="Відкрити копію для перегляду (.bak)…", command=self.open_backup_view)
+        file_menu.add_command(label="Відновити робочу базу з копії (.bak)…", command=self.restore_database_backup)
         file_menu.add_separator()
         file_menu.add_command(label="Вихід", command=self.destroy)
         menubar.add_cascade(label="Файл", menu=file_menu)
@@ -547,9 +600,14 @@ class StudentManagementApp(ctk.CTk):
             return new_db
 
         def on_success(new_db):
-            if self.db:
-                self.db.close()
-            self.db = new_db
+            if self.live_db and self.live_db is not new_db:
+                try:
+                    self.live_db.close()
+                except Exception:
+                    pass
+            self.live_db = new_db
+            if not getattr(self, "_viewing_backup", False):
+                self.db = new_db
             self.status_dot.configure(text_color="#2b8a3e")
             self.status_label.configure(text=f"Підключено: {db_cfg.get('dbname')}@{db_cfg.get('host')}")
             if show_success:
@@ -570,6 +628,17 @@ class StudentManagementApp(ctk.CTk):
             return False
         return True
 
+    def require_writable(self):
+        if not self.require_db():
+            return False
+        if getattr(self.db, "read_only", False):
+            messagebox.showwarning(
+                "Лише перегляд",
+                "Зараз відкрита збережена копія бази. Зміни недоступні.\nЗакрийте копію, щоб повернутися до робочої бази.",
+            )
+            return False
+        return True
+
     def refresh_all_views(self):
         if not self.db or not self.db.is_connected():
             return
@@ -579,7 +648,7 @@ class StudentManagementApp(ctk.CTk):
 
     # -- обслуговування БД -------------------------------------------------
     def clear_rewards_only(self):
-        if not self.require_db():
+        if not self.require_writable():
             return
         if not messagebox.askyesno("Підтвердження", "Очистити всі збережені накази про нагородження та нараховані бали?"):
             return
@@ -591,7 +660,7 @@ class StudentManagementApp(ctk.CTk):
             messagebox.showerror("Помилка", str(e))
 
     def clear_entire_database(self):
-        if not self.require_db():
+        if not self.require_writable():
             return
         if not messagebox.askyesno("Підтвердження", "УВАГА! Це повністю видалить усіх студентів, групи, накази й бали. Продовжити?"):
             return
@@ -621,7 +690,7 @@ class StudentManagementApp(ctk.CTk):
             messagebox.showerror("Помилка експорту", str(e))
 
     def save_database_backup(self):
-        if not self.require_db():
+        if not self.require_writable():
             return
         stamp = datetime.now().strftime("%Y-%m-%d")
         file_path = filedialog.asksaveasfilename(
@@ -638,7 +707,7 @@ class StudentManagementApp(ctk.CTk):
             messagebox.showerror("Помилка копії БД", str(e))
 
     def restore_database_backup(self):
-        if not self.require_db():
+        if not self.require_writable():
             return
         file_path = filedialog.askopenfilename(
             filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
@@ -656,6 +725,39 @@ class StudentManagementApp(ctk.CTk):
             messagebox.showinfo("Відновлено", "Базу даних відновлено з копії.")
         except Exception as e:
             messagebox.showerror("Помилка відновлення", str(e))
+
+    def open_backup_view(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            snapshot = database.load_backup_snapshot(file_path)
+        except Exception as e:
+            messagebox.showerror("Не вдалося відкрити копію", str(e))
+            return
+        self.db = snapshot
+        self._viewing_backup = True
+        self.backup_banner_label.configure(text=f"Перегляд копії: {os.path.basename(file_path)}  (лише читання, робоча база не змінюється)")
+        self.backup_banner.grid()
+        self.status_dot.configure(text_color="#e67700")
+        self.status_label.configure(text=f"Копія: {os.path.basename(file_path)}")
+        self.refresh_all_views()
+        self.show_page("rating")
+
+    def close_backup_view(self):
+        self._viewing_backup = False
+        self.db = self.live_db
+        self.backup_banner.grid_remove()
+        if self.live_db and self.live_db.is_connected():
+            db_cfg = self.app_config["db"]
+            self.status_dot.configure(text_color="#2b8a3e")
+            self.status_label.configure(text=f"Підключено: {db_cfg.get('dbname')}@{db_cfg.get('host')}")
+            self.refresh_all_views()
+        else:
+            self.status_dot.configure(text_color="#c92a2a")
+            self.status_label.configure(text="Немає з'єднання з БД")
 
     # -- вкладка «База даних» --------------------------------------------
     def setup_db_tab(self):
@@ -794,6 +896,8 @@ class StudentManagementApp(ctk.CTk):
 
     def delete_selected_db_row(self):
         self._cancel_inline_edit()
+        if not self.require_writable():
+            return
         selected_item = self.db_tree.selection()
         if not selected_item or not self.selected_db_table:
             return
@@ -843,6 +947,8 @@ class StudentManagementApp(ctk.CTk):
             return
         if col_name not in database.ALLOWED_TABLES.get(self.selected_db_table, []):
             return
+        if not self.require_writable():
+            return
         bbox = self.db_tree.bbox(item, column_id)
         if not bbox:
             return
@@ -877,6 +983,9 @@ class StudentManagementApp(ctk.CTk):
 
     def _commit_inline_edit(self):
         if not self._edit_entry or not self._edit_meta:
+            return
+        if not self.require_writable():
+            self._cancel_inline_edit()
             return
         new_val = self._edit_entry.get().strip()
         old_val = self._edit_meta["old"]
@@ -991,7 +1100,7 @@ class StudentManagementApp(ctk.CTk):
         run_async(self, work, on_success, on_error)
 
     def save_parsed_to_db(self):
-        if not self.loaded_data or not self.require_db():
+        if not self.loaded_data or not self.require_writable():
             return
 
         def work():
@@ -1003,7 +1112,7 @@ class StudentManagementApp(ctk.CTk):
         def on_success(_):
             messagebox.showinfo("Успіх", "Усі групи та списки студентів успішно збережені в базі даних!")
             self.refresh_all_views()
-            self.tabview.set("Студенти")
+            self.show_page("students")
 
         def on_error(exc):
             messagebox.showerror("Помилка запису в БД", str(exc))
@@ -1286,7 +1395,7 @@ class StudentManagementApp(ctk.CTk):
             MatchResolutionDialog(self, st["full_name"], candidates, resolved)
 
     def save_reward_to_db(self):
-        if not self.loaded_reward_data or not self.loaded_reward_data["students"] or not self.require_db():
+        if not self.loaded_reward_data or not self.loaded_reward_data["students"] or not self.require_writable():
             return
         unmatched = [s for s in self.loaded_reward_data["students"] if not s.get("matched_id")]
         if unmatched:
@@ -1307,7 +1416,7 @@ class StudentManagementApp(ctk.CTk):
                 with open(source_path, "rb") as fh:
                     source_bytes = fh.read()
             order_id = self.db.upsert_order(
-                data["order_number"], data["order_date"], data["event_title"],
+                data["order_number"], data["order_date"], "—",
                 data["level_type"], data["points"],
                 source_filename=source_name, source_file=source_bytes,
             )
@@ -1323,7 +1432,7 @@ class StudentManagementApp(ctk.CTk):
             messagebox.showinfo("Успіх", f"Наказ збережено. Оновлено бали для {count} студентів.")
             self.load_rating_data()
             self.refresh_db_sidebar_tables()
-            self.tabview.set("Рейтинг")
+            self.show_page("rating")
 
         def on_error(exc):
             messagebox.showerror("Помилка збереження в БД", str(exc))
@@ -1352,7 +1461,7 @@ class StudentManagementApp(ctk.CTk):
         self.rating_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
         for col, text, w in [
             ("place", "Місце", 70), ("name", "ПІБ студента", 260), ("grp", "Група", 90),
-            ("total_pts", "Бали", 80), ("orders", "Накази / підстави", 420),
+            ("total_pts", "Бали", 80), ("orders", "Накази", 420),
         ]:
             self.rating_tree.heading(col, text=text)
             self.rating_tree.column(col, width=w, anchor="center" if col in ("place", "grp", "total_pts") else "w")
@@ -1364,7 +1473,7 @@ class StudentManagementApp(ctk.CTk):
         self.rating_tree.bind("<Double-1>", self.on_rating_student_open)
         self._treeviews.append(self.rating_tree)
 
-        ctk.CTkLabel(self.tab_rating, text="Двічі клацніть студента, щоб побачити подяки й догани з номерами наказів і відкрити файл. Експорт: загальний рейтинг за балами, аркуші груп за алфавітом, окремий аркуш із деталями нарахувань.", text_color="gray").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.tab_rating, text="Двічі клацніть студента, щоб побачити накази, бали та відкрити файл документа.", text_color="gray").grid(row=2, column=0, padx=10, pady=5, sticky="w")
 
     def load_rating_data(self):
         if not self.db or not self.db.is_connected():
