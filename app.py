@@ -1,7 +1,10 @@
 import logging
 import os
+import subprocess
+import tempfile
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -12,7 +15,7 @@ import export
 import matching
 from parsers.reward_parser import parse_reward_order
 from parsers.students_parser import parse_students_tables
-from scoring import applied_points, format_points
+from scoring import applied_points, format_achievement_line, format_points
 
 logging.basicConfig(
     filename=os.path.join(os.path.expanduser("~"), "doc_flow_app.log"),
@@ -38,6 +41,7 @@ COLUMN_LABELS = {
     "event_title": "Захід / підстава",
     "level_type": "Рівень",
     "default_points": "Бали наказу",
+    "source_filename": "Файл наказу",
     "student_id": "ID студента",
     "order_id": "ID наказу",
     "points_awarded": "Нараховані бали",
@@ -309,6 +313,93 @@ class MatchResolutionDialog(ctk.CTkToplevel):
         self.on_resolved(chosen)
 
 
+def open_attachment_bytes(filename, blob):
+    if not blob:
+        raise FileNotFoundError("До цього наказу файл не прикріплено.")
+    suffix = os.path.splitext(filename or "order.bin")[1] or ".bin"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(blob)
+    tmp.close()
+    try:
+        os.startfile(tmp.name)  # Windows
+    except AttributeError:
+        subprocess.Popen(["xdg-open", tmp.name])
+    return tmp.name
+
+
+class StudentHistoryDialog(ctk.CTkToplevel):
+    def __init__(self, master, student_name, group_name, total_points, history, open_file_fn):
+        super().__init__(master)
+        self.title(f"Нарахування: {student_name}")
+        self.geometry("860x460")
+        self.grab_set()
+        self.history = history
+        self.open_file_fn = open_file_fn
+
+        ctk.CTkLabel(
+            self,
+            text=f"{student_name}  ·  група {group_name}  ·  у рейтингу: {format_points(total_points)}",
+            font=("Segoe UI", 14, "bold"),
+            justify="left",
+        ).pack(padx=16, pady=(16, 8), anchor="w")
+
+        frame = ctk.CTkFrame(self)
+        frame.pack(fill="both", expand=True, padx=16, pady=8)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=1)
+
+        columns = ("date", "number", "title", "level", "pts", "file")
+        self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
+        for col, text, w in [
+            ("date", "Дата", 100), ("number", "№ наказу", 110), ("title", "За що / підстава", 280),
+            ("level", "Рівень", 140), ("pts", "Бали", 70), ("file", "Файл", 160),
+        ]:
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=w, anchor="w" if col in ("title", "file") else "center")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.tree.bind("<Double-1>", lambda _e: self._open_selected())
+
+        if not history:
+            self.tree.insert("", "end", values=("", "", "Немає подяк і доган", "", "", ""))
+        else:
+            for item in history:
+                pts = format_points(item["points"])
+                if float(item["points"]) > 0:
+                    pts = f"+{pts}"
+                filename = item.get("source_filename") or ("є файл" if item.get("has_file") else "—")
+                self.tree.insert("", "end", iid=str(item["order_id"]), values=(
+                    item.get("order_date") or "",
+                    item.get("order_number") or "",
+                    item.get("event_title") or "",
+                    item.get("level_type") or "",
+                    pts,
+                    filename,
+                ))
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=16, pady=(4, 16))
+        ctk.CTkButton(btns, text="Відкрити файл наказу", width=180, command=self._open_selected).pack(side="left")
+        ctk.CTkButton(btns, text="Закрити", width=110, command=self.destroy).pack(side="right")
+
+    def _open_selected(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("Файл наказу", "Оберіть рядок наказу в таблиці.")
+            return
+        order_id = selected[0]
+        item = next((h for h in self.history if str(h["order_id"]) == str(order_id)), None)
+        if not item or not item.get("has_file"):
+            messagebox.showinfo("Файл наказу", "До цього наказу файл не прикріплено.")
+            return
+        try:
+            self.open_file_fn(item["order_id"])
+        except Exception as exc:
+            messagebox.showerror("Не вдалося відкрити файл", str(exc))
+
+
 class StudentManagementApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -375,6 +466,7 @@ class StudentManagementApp(ctk.CTk):
         actions.grid(row=0, column=3, padx=8, pady=8, sticky="e")
         ctk.CTkButton(actions, text="Оновити", width=100, command=self.refresh_all_views).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="Експорт рейтингу", width=150, command=self.export_rating).pack(side="left", padx=4)
+        ctk.CTkButton(actions, text="Копія БД", width=110, command=self.save_database_backup).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="Налаштування", width=130, command=self.open_settings).pack(side="left", padx=4)
 
         self.tabview = ctk.CTkTabview(self)
@@ -407,6 +499,9 @@ class StudentManagementApp(ctk.CTk):
         menubar = tk.Menu(self)
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Експорт рейтингу…", command=self.export_rating)
+        file_menu.add_separator()
+        file_menu.add_command(label="Зберегти копію бази (.bak)…", command=self.save_database_backup)
+        file_menu.add_command(label="Відновити базу з копії (.bak)…", command=self.restore_database_backup)
         file_menu.add_separator()
         file_menu.add_command(label="Вихід", command=self.destroy)
         menubar.add_cascade(label="Файл", menu=file_menu)
@@ -519,10 +614,48 @@ class StudentManagementApp(ctk.CTk):
             return
         try:
             rating = self.db.get_rating()
-            export.export_rating_to_xlsx(rating, file_path)
+            details = self.db.get_achievement_details()
+            export.export_rating_to_xlsx(rating, file_path, detail_rows=details)
             messagebox.showinfo("Успіх", f"Рейтинг збережено:\n{file_path}")
         except Exception as e:
             messagebox.showerror("Помилка експорту", str(e))
+
+    def save_database_backup(self):
+        if not self.require_db():
+            return
+        stamp = datetime.now().strftime("%Y-%m-%d")
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".bak",
+            initialfile=f"DocFlow_backup_{stamp}.bak",
+            filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            self.db.save_backup(file_path)
+            messagebox.showinfo("Копію збережено", f"Поточну базу записано у файл:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Помилка копії БД", str(e))
+
+    def restore_database_backup(self):
+        if not self.require_db():
+            return
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
+        )
+        if not file_path:
+            return
+        if not messagebox.askyesno(
+            "Відновити базу?",
+            "Поточні групи, студенти, накази й бали будуть замінені даними з копії. Продовжити?",
+        ):
+            return
+        try:
+            self.db.restore_backup(file_path)
+            self.refresh_all_views()
+            messagebox.showinfo("Відновлено", "Базу даних відновлено з копії.")
+        except Exception as e:
+            messagebox.showerror("Помилка відновлення", str(e))
 
     # -- вкладка «База даних» --------------------------------------------
     def setup_db_tab(self):
@@ -544,6 +677,9 @@ class StudentManagementApp(ctk.CTk):
         )
         self._hide_students_filter()
 
+        self.db_open_file_btn = ctk.CTkButton(
+            ctrl_sb, text="Відкрити файл наказу", width=170, command=self.open_selected_order_file
+        )
         ctk.CTkButton(
             ctrl_sb, text="Зберегти зміну", fg_color="#2b8a3e", width=140, command=self._commit_inline_edit
         ).pack(side="right", padx=4)
@@ -572,7 +708,7 @@ class StudentManagementApp(ctk.CTk):
 
         self.db_hint = ctk.CTkLabel(
             self.tab_db,
-            text="Двічі клацніть клітинку, щоб редагувати її прямо в таблиці. Enter або «Зберегти зміну» — підтвердити, Esc — скасувати.",
+            text="Двічі клацніть клітинку, щоб редагувати. У таблиці наказів двічі клацніть «Файл наказу», щоб відкрити документ.",
             text_color="gray",
             wraplength=1200,
             justify="left",
@@ -631,6 +767,10 @@ class StudentManagementApp(ctk.CTk):
             self._show_students_filter()
         else:
             self._hide_students_filter()
+        if table_name == "orders":
+            self.db_open_file_btn.pack(side="left", padx=10)
+        else:
+            self.db_open_file_btn.pack_forget()
         try:
             group_id = None
             if table_name == "students":
@@ -643,7 +783,7 @@ class StudentManagementApp(ctk.CTk):
             self.db_tree.configure(columns=columns)
             for col in columns:
                 self.db_tree.heading(col, text=COLUMN_LABELS.get(col, col))
-                self.db_tree.column(col, width=140 if col != "id" else 60, anchor="w")
+                self.db_tree.column(col, width=220 if col == "source_filename" else (140 if col != "id" else 60), anchor="w")
             for row in self.db_tree.get_children():
                 self.db_tree.delete(row)
             for idx, r in enumerate(rows):
@@ -667,6 +807,25 @@ class StudentManagementApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Помилка", str(e))
 
+    def open_selected_order_file(self):
+        if self.selected_db_table != "orders":
+            messagebox.showinfo("Файл наказу", "Спочатку відкрийте таблицю «Накази».")
+            return
+        selected_item = self.db_tree.selection()
+        if not selected_item:
+            messagebox.showinfo("Файл наказу", "Оберіть рядок наказу.")
+            return
+        self.open_order_attachment(self.db_tree.item(selected_item)["values"][0])
+
+    def open_order_attachment(self, order_id):
+        if not self.require_db():
+            return
+        try:
+            filename, blob = self.db.get_order_attachment(order_id)
+            open_attachment_bytes(filename, blob)
+        except Exception as e:
+            messagebox.showerror("Файл наказу", str(e))
+
     def on_db_table_cell_double_click(self, event):
         self._cancel_inline_edit()
         item = self.db_tree.identify_row(event.y)
@@ -678,12 +837,15 @@ class StudentManagementApp(ctk.CTk):
         if col_index < 0 or col_index >= len(columns):
             return
         col_name = columns[col_index]
+        values = list(self.db_tree.item(item)["values"])
+        if col_name == "source_filename":
+            self.open_order_attachment(values[0])
+            return
         if col_name not in database.ALLOWED_TABLES.get(self.selected_db_table, []):
             return
         bbox = self.db_tree.bbox(item, column_id)
         if not bbox:
             return
-        values = list(self.db_tree.item(item)["values"])
         current_val = "" if values[col_index] is None else str(values[col_index])
         row_id = values[0]
 
@@ -1004,7 +1166,7 @@ class StudentManagementApp(ctk.CTk):
             )
             db_students = self.db.get_all_students_flat()
             threshold = self.app_config.get("match_threshold", 0.72)
-            totals = self.db.get_student_totals() if reward_data.get("order_kind") == "reprimand" else {}
+            reward_data["source_path"] = path
 
             for st in reward_data["students"]:
                 match, score, candidates = matching.find_best_match(st["full_name"], st["group_name"], db_students, threshold)
@@ -1013,8 +1175,7 @@ class StudentManagementApp(ctk.CTk):
                 st["group_name"] = match["group_name"] if match else (st["group_name"] or "Не визначено")
                 st["match_score"] = score
                 st["candidates"] = candidates
-                current = totals.get(st["matched_id"], 0) if st.get("matched_id") else 0
-                st["applied_points"] = applied_points(reward_data.get("order_kind"), reward_data["points"], current)
+                st["applied_points"] = applied_points(reward_data.get("order_kind"), reward_data["points"])
             return reward_data
 
         def on_success(reward_data):
@@ -1069,12 +1230,12 @@ class StudentManagementApp(ctk.CTk):
         data = self.loaded_reward_data
         if not data:
             return
-        totals = {}
-        if data.get("order_kind") == "reprimand" and self.db and self.db.is_connected():
-            totals = self.db.get_student_totals()
+    def _recompute_applied_points(self):
+        data = self.loaded_reward_data
+        if not data:
+            return
         for st in data["students"]:
-            current = totals.get(st["matched_id"], 0) if st.get("matched_id") else 0
-            st["applied_points"] = applied_points(data.get("order_kind"), data["points"], current)
+            st["applied_points"] = applied_points(data.get("order_kind"), data["points"])
 
     def confirm_all_matches(self):
         """Приймає найімовірніший варіант для всіх ще непідтверджених рядків.
@@ -1139,13 +1300,21 @@ class StudentManagementApp(ctk.CTk):
         data = self.loaded_reward_data
 
         def work():
-            order_id = self.db.upsert_order(data["order_number"], data["order_date"], data["event_title"], data["level_type"], data["points"])
-            totals = self.db.get_student_totals() if data.get("order_kind") == "reprimand" else {}
+            source_path = data.get("source_path")
+            source_name = os.path.basename(source_path) if source_path else None
+            source_bytes = None
+            if source_path and os.path.isfile(source_path):
+                with open(source_path, "rb") as fh:
+                    source_bytes = fh.read()
+            order_id = self.db.upsert_order(
+                data["order_number"], data["order_date"], data["event_title"],
+                data["level_type"], data["points"],
+                source_filename=source_name, source_file=source_bytes,
+            )
             count = 0
             for st in data["students"]:
                 if st.get("matched_id"):
-                    current = totals.get(st["matched_id"], 0)
-                    pts = applied_points(data.get("order_kind"), data["points"], current)
+                    pts = applied_points(data.get("order_kind"), data["points"])
                     self.db.add_achievement(st["matched_id"], order_id, pts)
                     count += 1
             return count
@@ -1179,19 +1348,23 @@ class StudentManagementApp(ctk.CTk):
         rt_frame.grid_columnconfigure(0, weight=1)
         rt_frame.grid_rowconfigure(0, weight=1)
 
-        columns = ("place", "name", "grp", "total_pts")
+        columns = ("place", "name", "grp", "total_pts", "orders")
         self.rating_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [("place", "Місце", 70), ("name", "ПІБ студента", 330), ("grp", "Група", 120), ("total_pts", "Загалом балів", 120)]:
+        for col, text, w in [
+            ("place", "Місце", 70), ("name", "ПІБ студента", 260), ("grp", "Група", 90),
+            ("total_pts", "Бали", 80), ("orders", "Накази / підстави", 420),
+        ]:
             self.rating_tree.heading(col, text=text)
-            self.rating_tree.column(col, width=w, anchor="center" if col != "name" else "w")
+            self.rating_tree.column(col, width=w, anchor="center" if col in ("place", "grp", "total_pts") else "w")
 
         rt_scroll = ttk.Scrollbar(rt_frame, orient="vertical", command=self.rating_tree.yview)
         self.rating_tree.configure(yscrollcommand=rt_scroll.set)
         self.rating_tree.grid(row=0, column=0, sticky="nsew")
         rt_scroll.grid(row=0, column=1, sticky="ns")
+        self.rating_tree.bind("<Double-1>", self.on_rating_student_open)
         self._treeviews.append(self.rating_tree)
 
-        ctk.CTkLabel(self.tab_rating, text="Загальний рейтинг або фільтр по групі. Експорт створює Excel з аркушем «Загальний рейтинг» і окремим аркушем для кожної групи.", text_color="gray").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.tab_rating, text="Двічі клацніть студента, щоб побачити подяки й догани з номерами наказів і відкрити файл. Експорт: загальний рейтинг за балами, аркуші груп за алфавітом, окремий аркуш із деталями нарахувань.", text_color="gray").grid(row=2, column=0, padx=10, pady=5, sticky="w")
 
     def load_rating_data(self):
         if not self.db or not self.db.is_connected():
@@ -1204,13 +1377,38 @@ class StudentManagementApp(ctk.CTk):
                 group_id = match[0] if match else None
 
             rows = self.db.get_rating(group_id)
+            details = self.db.get_achievement_details()
+            by_id = {}
+            for item in details:
+                by_id.setdefault(item["student_id"], []).append(item)
             for row in self.rating_tree.get_children():
                 self.rating_tree.delete(row)
             for idx, r in enumerate(rows, 1):
                 tag = "odd" if idx % 2 == 0 else "even"
-                self.rating_tree.insert("", "end", values=(idx, r["full_name"], r["group_name"], format_points(r["total"])), tags=(tag,))
+                summary = "; ".join(format_achievement_line(item) for item in by_id.get(r["student_id"], [])) or "—"
+                self.rating_tree.insert(
+                    "", "end", iid=str(r["student_id"]),
+                    values=(idx, r["full_name"], r["group_name"], format_points(r["total"]), summary),
+                    tags=(tag,),
+                )
         except Exception:
             logger.exception("load_rating_data")
+
+    def on_rating_student_open(self, _event=None):
+        selected = self.rating_tree.selection()
+        if not selected or not self.require_db():
+            return
+        student_id = int(selected[0])
+        values = self.rating_tree.item(selected)["values"]
+        history = self.db.get_student_history(student_id)
+        StudentHistoryDialog(
+            self,
+            student_name=values[1],
+            group_name=values[2],
+            total_points=values[3],
+            history=history,
+            open_file_fn=self.open_order_attachment,
+        )
 
 
 if __name__ == "__main__":

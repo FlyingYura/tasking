@@ -1,15 +1,28 @@
 """
-Експорт даних у файли .xlsx (замість єдиного варіанту — простого текстового
-дампу всіх таблиць), щоб звіт можна було одразу відкрити в Excel,
+Експорт даних у файли .xlsx, щоб звіт можна було одразу відкрити в Excel,
 відформатувати чи роздрукувати для директора.
 """
 
 import re
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
+from scoring import format_achievement_line
+
+
+_UKR_LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя"
+
+
+def name_sort_key(name):
+    """Алфавітний ключ з урахуванням української «і/ї/є/ґ», а не коду Unicode."""
+    keys = []
+    for ch in (name or "").casefold():
+        pos = _UKR_LETTERS.find(ch)
+        keys.append((0, pos) if pos >= 0 else (1, ch))
+    return keys
 
 
 def _safe_sheet_name(name, used):
@@ -26,15 +39,57 @@ def _safe_sheet_name(name, used):
 
 
 def _normalize_total(total):
-    if isinstance(total, float) and total == int(total):
-        return int(total)
-    return total
+    try:
+        number = float(total)
+    except (TypeError, ValueError):
+        return total
+    if number == int(number):
+        return int(number)
+    return number
 
 
-def _fill_rating_sheet(ws, rating_rows, title):
+def _style_header_row(ws, row_idx, col_count):
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="1C7ED6")
-    header_align = Alignment(horizontal="center", vertical="center")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    thin = Border(
+        left=Side(style="thin", color="CED4DA"),
+        right=Side(style="thin", color="CED4DA"),
+        top=Side(style="thin", color="CED4DA"),
+        bottom=Side(style="thin", color="CED4DA"),
+    )
+    for col in range(1, col_count + 1):
+        cell = ws.cell(row_idx, col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin
+    return thin
+
+
+def _attach_details(rating_rows, detail_rows):
+    by_id = defaultdict(list)
+    by_name = defaultdict(list)
+    for item in detail_rows or []:
+        if item.get("student_id") is not None:
+            by_id[item["student_id"]].append(item)
+        by_name[(item.get("full_name"), item.get("group_name"))].append(item)
+
+    enriched = []
+    for row in rating_rows:
+        details = []
+        if row.get("student_id") is not None:
+            details = by_id.get(row["student_id"]) or []
+        if not details:
+            details = by_name.get((row.get("full_name"), row.get("group_name"))) or []
+        copy = dict(row)
+        copy["details"] = details
+        copy["details_text"] = "; ".join(format_achievement_line(item) for item in details) or "—"
+        enriched.append(copy)
+    return enriched
+
+
+def _fill_student_sheet(ws, title, headers, rows, numbered=True):
     thin = Border(
         left=Side(style="thin", color="CED4DA"),
         right=Side(style="thin", color="CED4DA"),
@@ -42,53 +97,116 @@ def _fill_rating_sheet(ws, rating_rows, title):
         bottom=Side(style="thin", color="CED4DA"),
     )
     stripe = PatternFill("solid", fgColor="F1F3F5")
+    wrap = Alignment(wrap_text=True, vertical="center")
 
-    ws.merge_cells("A1:D1")
+    last_col = get_column_letter(len(headers))
+    ws.merge_cells(f"A1:{last_col}1")
     ws["A1"] = title
     ws["A1"].font = Font(bold=True, size=14)
     ws["A1"].alignment = Alignment(vertical="center")
     ws.row_dimensions[1].height = 22
-
-    headers = ["Місце", "ПІБ студента", "Група", "Загалом балів"]
     ws.append([])
     ws.append(headers)
-    for cell in ws[3]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = header_align
-        cell.border = thin
+    _style_header_row(ws, 3, len(headers))
 
-    for idx, row in enumerate(rating_rows, 1):
-        values = [idx, row["full_name"], row["group_name"], _normalize_total(row["total"])]
+    for idx, row in enumerate(rows, 1):
+        values = []
+        if numbered:
+            values.append(idx)
+        values.extend([
+            row["full_name"],
+            row["group_name"],
+            _normalize_total(row["total"]),
+            row.get("details_text") or "—",
+        ])
         ws.append(values)
         excel_row = 3 + idx
         for cell in ws[excel_row]:
             cell.border = thin
+            cell.alignment = wrap
             if idx % 2 == 0:
                 cell.fill = stripe
-        ws.cell(excel_row, 1).alignment = Alignment(horizontal="center")
-        ws.cell(excel_row, 4).alignment = Alignment(horizontal="center")
+        ws.row_dimensions[excel_row].height = 36
 
-    for col, width in zip(range(1, 5), (10, 42, 16, 16)):
+    widths = (8, 36, 14, 14, 70) if numbered else (36, 14, 14, 70)
+    for col, width in zip(range(1, len(headers) + 1), widths):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = "A4"
-    ws.auto_filter.ref = f"A3:D{3 + len(rating_rows)}"
+    if rows:
+        ws.auto_filter.ref = f"A3:{last_col}{3 + len(rows)}"
 
 
-def export_rating_to_xlsx(rating_rows, file_path):
+def _fill_details_sheet(ws, detail_rows):
+    headers = ["ПІБ студента", "Група", "Номер наказу", "Дата", "Підстава (за що)", "Рівень", "Бали", "Файл наказу"]
+    ws.merge_cells("A1:H1")
+    ws["A1"] = "Деталі нарахувань: кожен рядок — одна подяка або догана"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append([])
+    ws.append(headers)
+    thin = _style_header_row(ws, 3, len(headers))
+    stripe = PatternFill("solid", fgColor="F1F3F5")
+    wrap = Alignment(wrap_text=True, vertical="center")
+
+    for idx, item in enumerate(detail_rows or [], 1):
+        ws.append([
+            item.get("full_name"),
+            item.get("group_name"),
+            item.get("order_number"),
+            item.get("order_date"),
+            item.get("event_title"),
+            item.get("level_type"),
+            _normalize_total(item.get("points")),
+            item.get("source_filename") or "—",
+        ])
+        excel_row = 3 + idx
+        for cell in ws[excel_row]:
+            cell.border = thin
+            cell.alignment = wrap
+            if idx % 2 == 0:
+                cell.fill = stripe
+
+    for col, width in zip(range(1, 9), (36, 14, 16, 14, 50, 22, 10, 32)):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    ws.freeze_panes = "A4"
+    if detail_rows:
+        ws.auto_filter.ref = f"A3:H{3 + len(detail_rows)}"
+
+
+def export_rating_to_xlsx(rating_rows, file_path, detail_rows=None):
+    rows = _attach_details(rating_rows, detail_rows)
+    overall_rows = sorted(
+        rows,
+        key=lambda r: (-float(r.get("total") or 0), name_sort_key(r.get("full_name"))),
+    )
     wb = Workbook()
     used = set()
     overall = wb.active
     overall.title = _safe_sheet_name("Загальний рейтинг", used)
-    _fill_rating_sheet(overall, rating_rows, "Загальний рейтинг")
+    _fill_student_sheet(
+        overall,
+        "Загальний рейтинг (за балами)",
+        ["Місце", "ПІБ студента", "Група", "Загалом балів", "Накази / підстави"],
+        overall_rows,
+        numbered=True,
+    )
 
     by_group = OrderedDict()
-    for row in rating_rows:
+    for row in rows:
         by_group.setdefault(row.get("group_name") or "Без групи", []).append(row)
 
-    for group_name, rows in by_group.items():
+    for group_name, group_rows in by_group.items():
+        alpha = sorted(group_rows, key=lambda r: name_sort_key(r.get("full_name")))
         sheet = wb.create_sheet(_safe_sheet_name(group_name, used))
-        _fill_rating_sheet(sheet, rows, f"Рейтинг групи {group_name}")
+        _fill_student_sheet(
+            sheet,
+            f"Група {group_name} (за алфавітом)",
+            ["№", "ПІБ студента", "Група", "Загалом балів", "Накази / підстави"],
+            alpha,
+            numbered=True,
+        )
+
+    details = wb.create_sheet(_safe_sheet_name("Деталі нарахувань", used))
+    _fill_details_sheet(details, detail_rows or [])
 
     wb.save(file_path)
 

@@ -116,14 +116,16 @@ class TestReprimandOrders(unittest.TestCase):
         self.assertEqual(_detect_order_kind("оголосити догану студентам коледжу"), "reprimand")
         self.assertEqual(_detect_order_kind("наказ про подяку студентам коледжу"), "reward")
 
-    def test_reprimand_does_not_subtract_from_zero(self):
-        self.assertEqual(applied_points("reprimand", 0.5, 0), 0.0)
-
-    def test_reprimand_subtracts_half_point(self):
+    def test_reprimand_is_always_stored_as_negative(self):
+        self.assertEqual(applied_points("reprimand", 0.5, 0), -0.5)
         self.assertEqual(applied_points("reprimand", 0.5, 3), -0.5)
 
-    def test_reprimand_does_not_go_below_zero(self):
-        self.assertEqual(applied_points("reprimand", 0.5, 0.3), -0.3)
+    def test_thanks_after_reprimand_nets_half_point(self):
+        from scoring import displayed_total
+        net = applied_points("reprimand", 0.5) + applied_points("reward", 1)
+        self.assertEqual(net, 0.5)
+        self.assertEqual(displayed_total(net), 0.5)
+        self.assertEqual(displayed_total(-0.5), 0.0)
 
     def test_parse_reprimand_order_sets_kind_and_points(self):
         from parsers import reward_parser

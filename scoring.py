@@ -11,18 +11,37 @@ def format_points(value):
     return f"{number:g}"
 
 
-def applied_points(order_kind, configured_points, current_total=0):
-    """Повертає фактичну зміну рейтингу для одного студента.
-
-    Подяка: завжди додає configured_points.
-    Догана: якщо поточний рейтинг 0 або менше — бали не чіпаємо;
-    якщо є бали — віднімаємо configured_points, але не нижче нуля.
-    """
-    points = abs(float(configured_points))
-    if order_kind != "reprimand":
-        return points
-
-    current = float(current_total or 0)
-    if current <= 0:
+def displayed_total(raw_total):
+    """Підсумок для таблиці рейтингу: догани враховуються, але не нижче нуля."""
+    try:
+        return max(0.0, float(raw_total or 0))
+    except (TypeError, ValueError):
         return 0.0
-    return -min(points, current)
+
+
+def applied_points(order_kind, configured_points, current_total=0):
+    """Фактична зміна, яку записуємо в нарахування.
+
+    Подяка: +configured_points.
+    Догана: завжди −configured_points (навіть якщо зараз 0), щоб пізніша
+    подяка «перекрила» догану: −0.5 + 1 = 0.5. Від’ємний підсумок
+    на екрані ховається через displayed_total().
+    """
+    del current_total  # лишається в сигнатурі для сумісності викликів
+    points = abs(float(configured_points))
+    if order_kind == "reprimand":
+        return -points
+    return points
+
+
+def format_achievement_line(item):
+    """Короткий рядок для експорту / підказок: «№12 від 01.09.2026: підстава (+1)»."""
+    number = item.get("order_number") or "Б/Н"
+    date = item.get("order_date") or ""
+    title = (item.get("event_title") or "").strip() or "—"
+    pts = float(item.get("points") or 0)
+    pts_text = format_points(pts)
+    if pts > 0:
+        pts_text = f"+{pts_text}"
+    date_part = f" від {date}" if date and date != "Не вказана" else ""
+    return f"№{number}{date_part}: {title} ({pts_text})"

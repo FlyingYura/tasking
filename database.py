@@ -19,10 +19,13 @@
 це прибирає ризик підстановки довільних імен колонок/таблиць у SQL.
 """
 
+import json
 import logging
+import zipfile
 from contextlib import contextmanager
 
 import psycopg2
+from psycopg2 import Binary
 
 logger = logging.getLogger("app.database")
 
@@ -122,6 +125,8 @@ class Database:
             # Існуючі бази створювались з INT; дробові бали доган (0.5) потребують NUMERIC.
             cur.execute("ALTER TABLE orders ALTER COLUMN default_points TYPE NUMERIC(8,2);")
             cur.execute("ALTER TABLE achievements ALTER COLUMN points_awarded TYPE NUMERIC(8,2);")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_filename TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_file BYTEA;")
 
     # -- групи / студенти ---------------------------------------------------
     def upsert_group(self, name, study_year, curator):
@@ -175,17 +180,20 @@ class Database:
             ]
 
     # -- накази / нарахування балів -----------------------------------------
-    def upsert_order(self, order_number, order_date, event_title, level_type, points):
+    def upsert_order(self, order_number, order_date, event_title, level_type, points, source_filename=None, source_file=None):
+        file_param = Binary(source_file) if source_file else None
         with self.cursor() as cur:
             cur.execute("""
-                INSERT INTO orders (order_number, order_date, event_title, level_type, default_points)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO orders (order_number, order_date, event_title, level_type, default_points, source_filename, source_file)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (order_number, order_date) DO UPDATE
                 SET event_title = EXCLUDED.event_title,
                     level_type = EXCLUDED.level_type,
-                    default_points = EXCLUDED.default_points
+                    default_points = EXCLUDED.default_points,
+                    source_filename = COALESCE(EXCLUDED.source_filename, orders.source_filename),
+                    source_file = COALESCE(EXCLUDED.source_file, orders.source_file)
                 RETURNING id;
-            """, (order_number, order_date, event_title, level_type, points))
+            """, (order_number, order_date, event_title, level_type, points, source_filename, file_param))
             return cur.fetchone()[0]
 
     def add_achievement(self, student_id, order_id, points):
@@ -197,29 +205,29 @@ class Database:
             """, (student_id, order_id, points))
 
     def get_rating(self, group_id=None):
-        """Один запит з JOIN + GROUP BY замість циклу по кожній таблиці групи."""
+        """Один запит з JOIN + GROUP BY. Підсумок не опускається нижче 0,
+        але самі догани в нарахуваннях зберігаються зі знаком мінус."""
         with self.cursor() as cur:
+            sql = """
+                SELECT s.id, s.full_name, g.name,
+                       GREATEST(0, COALESCE(SUM(a.points_awarded), 0)) AS total
+                FROM students s
+                JOIN groups g ON g.id = s.group_id
+                LEFT JOIN achievements a ON a.student_id = s.id
+            """
             if group_id:
-                cur.execute("""
-                    SELECT s.full_name, g.name, COALESCE(SUM(a.points_awarded), 0) AS total
-                    FROM students s
-                    JOIN groups g ON g.id = s.group_id
-                    LEFT JOIN achievements a ON a.student_id = s.id
+                cur.execute(sql + """
                     WHERE g.id = %s
                     GROUP BY s.id, s.full_name, g.name
                     ORDER BY total DESC, s.full_name ASC;
                 """, (group_id,))
             else:
-                cur.execute("""
-                    SELECT s.full_name, g.name, COALESCE(SUM(a.points_awarded), 0) AS total
-                    FROM students s
-                    JOIN groups g ON g.id = s.group_id
-                    LEFT JOIN achievements a ON a.student_id = s.id
+                cur.execute(sql + """
                     GROUP BY s.id, s.full_name, g.name
                     ORDER BY total DESC, s.full_name ASC;
                 """)
             return [
-                {"full_name": r[0], "group_name": r[1], "total": float(r[2] or 0)}
+                {"student_id": r[0], "full_name": r[1], "group_name": r[2], "total": float(r[3] or 0)}
                 for r in cur.fetchall()
             ]
 
@@ -236,13 +244,68 @@ class Database:
     def get_student_history(self, student_id):
         with self.cursor() as cur:
             cur.execute("""
-                SELECT o.order_number, o.order_date, o.event_title, a.points_awarded
+                SELECT o.id, o.order_number, o.order_date, o.event_title, o.level_type,
+                       a.points_awarded, o.source_filename, (o.source_file IS NOT NULL)
                 FROM achievements a
                 JOIN orders o ON o.id = a.order_id
                 WHERE a.student_id = %s
-                ORDER BY o.order_date DESC;
+                ORDER BY o.order_date DESC, o.id DESC;
             """, (student_id,))
-            return cur.fetchall()
+            return [
+                {
+                    "order_id": r[0],
+                    "order_number": r[1],
+                    "order_date": r[2],
+                    "event_title": r[3],
+                    "level_type": r[4],
+                    "points": float(r[5] or 0),
+                    "source_filename": r[6],
+                    "has_file": bool(r[7]),
+                }
+                for r in cur.fetchall()
+            ]
+
+    def get_achievement_details(self):
+        """Усі нарахування з реквізитами наказу — для Excel-експорту."""
+        with self.cursor() as cur:
+            cur.execute("""
+                SELECT s.id, s.full_name, g.name,
+                       o.order_number, o.order_date, o.event_title, o.level_type,
+                       a.points_awarded, o.source_filename
+                FROM achievements a
+                JOIN students s ON s.id = a.student_id
+                JOIN groups g ON g.id = s.group_id
+                JOIN orders o ON o.id = a.order_id
+                ORDER BY s.full_name, o.order_date, o.id;
+            """)
+            return [
+                {
+                    "student_id": r[0],
+                    "full_name": r[1],
+                    "group_name": r[2],
+                    "order_number": r[3],
+                    "order_date": r[4],
+                    "event_title": r[5],
+                    "level_type": r[6],
+                    "points": float(r[7] or 0),
+                    "source_filename": r[8],
+                }
+                for r in cur.fetchall()
+            ]
+
+    def get_order_attachment(self, order_id):
+        with self.cursor() as cur:
+            cur.execute(
+                "SELECT source_filename, source_file FROM orders WHERE id = %s;",
+                (order_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None
+            filename, blob = row
+            if blob is None:
+                return filename, None
+            return filename, bytes(blob)
 
     # -- обслуговування бази -------------------------------------------------
     def clear_rewards_and_ratings(self):
@@ -270,6 +333,13 @@ class Database:
                     cur.execute(sql + " WHERE s.group_id = %s ORDER BY s.full_name;", (group_id,))
                 else:
                     cur.execute(sql + " ORDER BY g.name, s.full_name;")
+            elif table_name == "orders":
+                cur.execute("""
+                    SELECT id, order_number, order_date, event_title, level_type, default_points,
+                           COALESCE(source_filename, '—') AS source_filename
+                    FROM orders
+                    ORDER BY id;
+                """)
             else:
                 cur.execute(f"SELECT * FROM {table_name} ORDER BY id;")  # nosec: table_name whitelisted above
             columns = [desc[0] for desc in cur.description]
@@ -290,3 +360,107 @@ class Database:
             raise DatabaseError(f"Таблиця '{table_name}' недоступна.")
         with self.cursor() as cur:
             cur.execute(f"DELETE FROM {table_name} WHERE id = %s;", (row_id,))  # nosec: whitelisted above
+
+    def save_backup(self, file_path):
+        """Зберігає повну копію даних (включно з файлами наказів) у .bak (ZIP)."""
+        with self.cursor() as cur:
+            cur.execute("SELECT id, name, study_year, curator FROM groups ORDER BY id;")
+            groups = [
+                {"id": r[0], "name": r[1], "study_year": r[2], "curator": r[3]}
+                for r in cur.fetchall()
+            ]
+            cur.execute("SELECT id, full_name, group_id, funding, note FROM students ORDER BY id;")
+            students = [
+                {"id": r[0], "full_name": r[1], "group_id": r[2], "funding": r[3], "note": r[4]}
+                for r in cur.fetchall()
+            ]
+            cur.execute("""
+                SELECT id, order_number, order_date, event_title, level_type, default_points, source_filename
+                FROM orders ORDER BY id;
+            """)
+            orders = [
+                {
+                    "id": r[0],
+                    "order_number": r[1],
+                    "order_date": r[2],
+                    "event_title": r[3],
+                    "level_type": r[4],
+                    "default_points": float(r[5] or 0),
+                    "source_filename": r[6],
+                }
+                for r in cur.fetchall()
+            ]
+            cur.execute("SELECT id, source_file FROM orders WHERE source_file IS NOT NULL;")
+            files = {r[0]: bytes(r[1]) for r in cur.fetchall()}
+            cur.execute("SELECT id, student_id, order_id, points_awarded FROM achievements ORDER BY id;")
+            achievements = [
+                {"id": r[0], "student_id": r[1], "order_id": r[2], "points_awarded": float(r[3] or 0)}
+                for r in cur.fetchall()
+            ]
+
+        manifest = {
+            "version": 1,
+            "format": "docflow-backup",
+            "groups": groups,
+            "students": students,
+            "orders": orders,
+            "achievements": achievements,
+        }
+        with zipfile.ZipFile(file_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            for order_id, blob in files.items():
+                filename = next((o["source_filename"] for o in orders if o["id"] == order_id), None) or "order.bin"
+                safe = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in filename)
+                zf.writestr(f"files/{order_id}_{safe}", blob)
+
+    def restore_backup(self, file_path):
+        """Відновлює дані з .bak, повністю замінюючи поточний вміст таблиць."""
+        with zipfile.ZipFile(file_path, "r") as zf:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            if manifest.get("format") not in (None, "docflow-backup"):
+                raise DatabaseError("Файл не є копією DocFlow.")
+            file_blobs = {}
+            for name in zf.namelist():
+                if name.startswith("files/") and not name.endswith("/"):
+                    part = name.split("/", 1)[1]
+                    order_id_str = part.split("_", 1)[0]
+                    try:
+                        file_blobs[int(order_id_str)] = zf.read(name)
+                    except ValueError:
+                        continue
+
+        with self.cursor() as cur:
+            cur.execute("TRUNCATE TABLE achievements, orders, students, groups RESTART IDENTITY CASCADE;")
+            for g in manifest.get("groups", []):
+                cur.execute(
+                    "INSERT INTO groups (id, name, study_year, curator) VALUES (%s, %s, %s, %s);",
+                    (g["id"], g["name"], g["study_year"], g["curator"]),
+                )
+            for s in manifest.get("students", []):
+                cur.execute(
+                    "INSERT INTO students (id, full_name, group_id, funding, note) VALUES (%s, %s, %s, %s, %s);",
+                    (s["id"], s["full_name"], s["group_id"], s.get("funding", "К"), s.get("note", "—")),
+                )
+            for o in manifest.get("orders", []):
+                blob = file_blobs.get(o["id"])
+                cur.execute(
+                    """
+                    INSERT INTO orders (id, order_number, order_date, event_title, level_type, default_points, source_filename, source_file)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                    """,
+                    (
+                        o["id"], o["order_number"], o["order_date"], o["event_title"],
+                        o["level_type"], o["default_points"], o.get("source_filename"),
+                        Binary(blob) if blob else None,
+                    ),
+                )
+            for a in manifest.get("achievements", []):
+                cur.execute(
+                    "INSERT INTO achievements (id, student_id, order_id, points_awarded) VALUES (%s, %s, %s, %s);",
+                    (a["id"], a["student_id"], a["order_id"], a["points_awarded"]),
+                )
+            for table in ("groups", "students", "orders", "achievements"):
+                cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table};")  # nosec: whitelist
+                max_id = cur.fetchone()[0]
+                if max_id:
+                    cur.execute(f"SELECT setval('{table}_id_seq', %s, true);", (max_id,))  # nosec: whitelist
