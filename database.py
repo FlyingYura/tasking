@@ -37,6 +37,8 @@ ALLOWED_TABLES = {
     "students": ["full_name", "funding", "note"],
     "orders": ["order_number", "order_date", "level_type", "default_points"],
     "achievements": ["points_awarded"],
+    "teachers": ["full_name", "position"],
+    "teacher_rewards": [],
 }
 
 
@@ -129,6 +131,23 @@ class Database:
             cur.execute("ALTER TABLE achievements ALTER COLUMN points_awarded TYPE NUMERIC(8,2);")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_filename TEXT;")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_file BYTEA;")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS teachers (
+                    id SERIAL PRIMARY KEY,
+                    full_name VARCHAR(200) NOT NULL UNIQUE,
+                    position VARCHAR(150) DEFAULT '—'
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS teacher_rewards (
+                    id SERIAL PRIMARY KEY,
+                    teacher_id INT NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+                    order_id INT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    UNIQUE(teacher_id, order_id)
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_teacher_rewards_teacher ON teacher_rewards(teacher_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_teacher_rewards_order ON teacher_rewards(order_id);")
 
     # -- групи / студенти ---------------------------------------------------
     def upsert_group(self, name, study_year, curator):
@@ -295,6 +314,100 @@ class Database:
                 for r in cur.fetchall()
             ]
 
+    # -- викладачі / подяки викладачів ----------------------------------------
+    def upsert_teacher(self, full_name, position="—"):
+        with self.cursor() as cur:
+            cur.execute("""
+                INSERT INTO teachers (full_name, position)
+                VALUES (%s, %s)
+                ON CONFLICT (full_name) DO UPDATE
+                SET position = COALESCE(EXCLUDED.position, teachers.position)
+                RETURNING id;
+            """, (full_name, position))
+            return cur.fetchone()[0]
+
+    def get_all_teachers(self):
+        with self.cursor() as cur:
+            cur.execute("SELECT id, full_name, position FROM teachers ORDER BY full_name;")
+            return [
+                {"id": r[0], "full_name": r[1], "position": r[2]}
+                for r in cur.fetchall()
+            ]
+
+    def add_teacher_reward(self, teacher_id, order_id):
+        with self.cursor() as cur:
+            cur.execute("""
+                INSERT INTO teacher_rewards (teacher_id, order_id)
+                VALUES (%s, %s)
+                ON CONFLICT (teacher_id, order_id) DO NOTHING;
+            """, (teacher_id, order_id))
+
+    def get_teacher_rewards(self):
+        """Всі подяки викладачів з реквізитами наказу — для Excel-експорту."""
+        with self.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, t.full_name, t.position,
+                       o.order_number, o.order_date, o.level_type, o.source_filename
+                FROM teacher_rewards tr
+                JOIN teachers t ON t.id = tr.teacher_id
+                JOIN orders o ON o.id = tr.order_id
+                ORDER BY t.full_name, o.order_date, o.id;
+            """)
+            return [
+                {
+                    "teacher_id": r[0],
+                    "full_name": r[1],
+                    "position": r[2],
+                    "order_number": r[3],
+                    "order_date": r[4],
+                    "level_type": r[5],
+                    "source_filename": r[6],
+                }
+                for r in cur.fetchall()
+            ]
+
+    def get_teacher_stats(self):
+        """Статистика подяок викладачів: кількість подяк для кожного викладача."""
+        with self.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, t.full_name, t.position, COUNT(tr.order_id) as reward_count
+                FROM teachers t
+                LEFT JOIN teacher_rewards tr ON t.id = tr.teacher_id
+                GROUP BY t.id, t.full_name, t.position
+                ORDER BY reward_count DESC, t.full_name ASC;
+            """)
+            return [
+                {
+                    "teacher_id": r[0],
+                    "full_name": r[1],
+                    "position": r[2],
+                    "reward_count": r[3] or 0,
+                }
+                for r in cur.fetchall()
+            ]
+
+    def get_teacher_history(self, teacher_id):
+        with self.cursor() as cur:
+            cur.execute("""
+                SELECT o.id, o.order_number, o.order_date, o.level_type,
+                       o.source_filename, (o.source_file IS NOT NULL)
+                FROM teacher_rewards tr
+                JOIN orders o ON o.id = tr.order_id
+                WHERE tr.teacher_id = %s
+                ORDER BY o.order_date DESC, o.id DESC;
+            """, (teacher_id,))
+            return [
+                {
+                    "order_id": r[0],
+                    "order_number": r[1],
+                    "order_date": r[2],
+                    "level_type": r[3],
+                    "source_filename": r[4],
+                    "has_file": bool(r[5]),
+                }
+                for r in cur.fetchall()
+            ]
+
     def get_order_attachment(self, order_id):
         with self.cursor() as cur:
             cur.execute(
@@ -316,7 +429,7 @@ class Database:
 
     def clear_entire_database(self):
         with self.cursor() as cur:
-            cur.execute("TRUNCATE TABLE achievements, orders, students, groups RESTART IDENTITY CASCADE;")
+            cur.execute("TRUNCATE TABLE teacher_rewards, teachers, achievements, orders, students, groups RESTART IDENTITY CASCADE;")
 
     def get_all_db_tables(self):
         return list(ALLOWED_TABLES.keys())
@@ -341,6 +454,20 @@ class Database:
                            COALESCE(source_filename, '—') AS source_filename
                     FROM orders
                     ORDER BY id;
+                """)
+            elif table_name == "teachers":
+                cur.execute("""
+                    SELECT id, full_name, position
+                    FROM teachers
+                    ORDER BY full_name;
+                """)
+            elif table_name == "teacher_rewards":
+                cur.execute("""
+                    SELECT tr.id, t.full_name, o.order_number, o.order_date
+                    FROM teacher_rewards tr
+                    JOIN teachers t ON t.id = tr.teacher_id
+                    JOIN orders o ON o.id = tr.order_id
+                    ORDER BY t.full_name, o.order_date;
                 """)
             else:
                 cur.execute(f"SELECT * FROM {table_name} ORDER BY id;")  # nosec: table_name whitelisted above
@@ -399,14 +526,26 @@ class Database:
                 {"id": r[0], "student_id": r[1], "order_id": r[2], "points_awarded": float(r[3] or 0)}
                 for r in cur.fetchall()
             ]
+            cur.execute("SELECT id, full_name, position FROM teachers ORDER BY id;")
+            teachers = [
+                {"id": r[0], "full_name": r[1], "position": r[2]}
+                for r in cur.fetchall()
+            ]
+            cur.execute("SELECT id, teacher_id, order_id FROM teacher_rewards ORDER BY id;")
+            teacher_rewards = [
+                {"id": r[0], "teacher_id": r[1], "order_id": r[2]}
+                for r in cur.fetchall()
+            ]
 
         manifest = {
             "version": 1,
-            "format": "docflow-backup",
+            "format": "aktiv-plus-backup",
             "groups": groups,
             "students": students,
             "orders": orders,
             "achievements": achievements,
+            "teachers": teachers,
+            "teacher_rewards": teacher_rewards,
         }
         with zipfile.ZipFile(file_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -420,7 +559,7 @@ class Database:
         manifest, file_blobs = read_backup_archive(file_path)
 
         with self.cursor() as cur:
-            cur.execute("TRUNCATE TABLE achievements, orders, students, groups RESTART IDENTITY CASCADE;")
+            cur.execute("TRUNCATE TABLE teacher_rewards, teachers, achievements, orders, students, groups RESTART IDENTITY CASCADE;")
             for g in manifest.get("groups", []):
                 cur.execute(
                     "INSERT INTO groups (id, name, study_year, curator) VALUES (%s, %s, %s, %s);",
@@ -449,7 +588,17 @@ class Database:
                     "INSERT INTO achievements (id, student_id, order_id, points_awarded) VALUES (%s, %s, %s, %s);",
                     (a["id"], a["student_id"], a["order_id"], a["points_awarded"]),
                 )
-            for table in ("groups", "students", "orders", "achievements"):
+            for t in manifest.get("teachers", []):
+                cur.execute(
+                    "INSERT INTO teachers (id, full_name, position) VALUES (%s, %s, %s);",
+                    (t["id"], t["full_name"], t.get("position", "—")),
+                )
+            for tr in manifest.get("teacher_rewards", []):
+                cur.execute(
+                    "INSERT INTO teacher_rewards (id, teacher_id, order_id) VALUES (%s, %s, %s);",
+                    (tr["id"], tr["teacher_id"], tr["order_id"]),
+                )
+            for table in ("groups", "students", "orders", "achievements", "teachers", "teacher_rewards"):
                 cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table};")  # nosec: whitelist
                 max_id = cur.fetchone()[0]
                 if max_id:

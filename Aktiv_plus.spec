@@ -7,6 +7,9 @@ datas += d2
 binaries += b2
 hiddenimports += h2
 
+# Додати іконку та assets
+datas += [("assets/icon.ico", "assets")]
+
 a = Analysis(
     ["app.py"],
     pathex=[],
@@ -25,6 +28,8 @@ a = Analysis(
         "export",
         "parsers.reward_parser",
         "parsers.students_parser",
+        "parsers.teachers_parser",
+        "parsers.doc_io",
     ],
     hookspath=[],
     hooksconfig={},
@@ -41,7 +46,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="DocFlow",
+    name="Aktiv_plus",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -54,4 +59,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="assets/icon.ico",
 )

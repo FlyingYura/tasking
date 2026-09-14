@@ -11,7 +11,7 @@ JSON-файлі профілю користувача, редагується ч
 import json
 import os
 
-CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".doc_flow_app_config.json")
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".aktiv_plus_config.json")
 
 DEFAULT_CONFIG = {
     "db": {

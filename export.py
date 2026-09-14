@@ -229,3 +229,82 @@ def export_group_to_xlsx(group_name, study_year, curator, students_rows, file_pa
         ws.column_dimensions[col].width = width
 
     wb.save(file_path)
+
+
+def export_teacher_rewards_to_xlsx(stats_rows, file_path, detail_rows=None):
+    """Експорт подяок викладачів у Excel."""
+    rows = _attach_teacher_details(stats_rows, detail_rows)
+    wb = Workbook()
+    used = set()
+    overall = wb.active
+    overall.title = _safe_sheet_name("Подяки викладачів", used)
+
+    headers = ["№", "ПІБ викладача", "Посада", "Кількість подяк", "Накази"]
+    _fill_teacher_sheet(overall, "Подяки викладачів", headers, rows, numbered=True)
+
+    wb.save(file_path)
+
+
+def _attach_teacher_details(stats_rows, detail_rows):
+    by_id = defaultdict(list)
+    for item in detail_rows or []:
+        if item.get("teacher_id") is not None:
+            by_id[item["teacher_id"]].append(item)
+
+    enriched = []
+    for row in stats_rows:
+        details = []
+        if row.get("teacher_id") is not None:
+            details = by_id.get(row["teacher_id"]) or []
+        copy = dict(row)
+        copy["details"] = details
+        copy["details_text"] = "; ".join(f"№{item['order_number']} від {item['order_date']}" for item in details) or "—"
+        enriched.append(copy)
+    return enriched
+
+
+def _fill_teacher_sheet(ws, title, headers, rows, numbered=True):
+    thin = Border(
+        left=Side(style="thin", color="CED4DA"),
+        right=Side(style="thin", color="CED4DA"),
+        top=Side(style="thin", color="CED4DA"),
+        bottom=Side(style="thin", color="CED4DA"),
+    )
+    stripe = PatternFill("solid", fgColor="F1F3F5")
+    wrap = Alignment(wrap_text=True, vertical="center")
+
+    last_col = get_column_letter(len(headers))
+    ws.merge_cells(f"A1:{last_col}1")
+    ws["A1"] = title
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A1"].alignment = Alignment(vertical="center")
+    ws.row_dimensions[1].height = 22
+    ws.append([])
+    ws.append(headers)
+    _style_header_row(ws, 3, len(headers))
+
+    for idx, row in enumerate(rows, 1):
+        values = []
+        if numbered:
+            values.append(idx)
+        values.extend([
+            row["full_name"],
+            row["position"],
+            row["reward_count"],
+            row.get("details_text") or "—",
+        ])
+        ws.append(values)
+        excel_row = 3 + idx
+        for cell in ws[excel_row]:
+            cell.border = thin
+            cell.alignment = wrap
+            if idx % 2 == 0:
+                cell.fill = stripe
+        ws.row_dimensions[excel_row].height = 36
+
+    widths = (8, 36, 20, 12, 70) if numbered else (36, 20, 12, 70)
+    for col, width in zip(range(1, len(headers) + 1), widths):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    ws.freeze_panes = "A4"
+    if rows:
+        ws.auto_filter.ref = f"A3:{last_col}{3 + len(rows)}"

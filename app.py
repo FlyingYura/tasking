@@ -18,7 +18,7 @@ from parsers.students_parser import parse_students_tables
 from scoring import applied_points, format_achievement_line, format_points
 
 logging.basicConfig(
-    filename=os.path.join(os.path.expanduser("~"), "doc_flow_app.log"),
+    filename=os.path.join(os.path.expanduser("~"), "aktiv_plus_app.log"),
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
@@ -44,6 +44,8 @@ COLUMN_LABELS = {
     "student_id": "ID студента",
     "order_id": "ID наказу",
     "points_awarded": "Нараховані бали",
+    "position": "Посада",
+    "teacher_id": "ID викладача",
 }
 
 TABLE_LABELS = {
@@ -51,6 +53,8 @@ TABLE_LABELS = {
     "students": "Студенти",
     "orders": "Накази",
     "achievements": "Нарахування балів",
+    "teachers": "Викладачі",
+    "teacher_rewards": "Подяки викладачів",
 }
 
 
@@ -371,12 +375,88 @@ class StudentHistoryDialog(ctk.CTkToplevel):
             messagebox.showerror("Не вдалося відкрити файл", str(exc))
 
 
+class TeacherHistoryDialog(ctk.CTkToplevel):
+    def __init__(self, master, teacher_name, position, reward_count, history, open_file_fn):
+        super().__init__(master)
+        self.title(f"Подяки: {teacher_name}")
+        self.geometry("860x460")
+        self.grab_set()
+        self.history = history
+        self.open_file_fn = open_file_fn
+
+        ctk.CTkLabel(
+            self,
+            text=f"{teacher_name}  ·  {position}  ·  кількість подяк: {reward_count}",
+            font=("Segoe UI", 14, "bold"),
+            justify="left",
+        ).pack(padx=16, pady=(16, 8), anchor="w")
+
+        frame = ctk.CTkFrame(self)
+        frame.pack(fill="both", expand=True, padx=16, pady=8)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=1)
+
+        columns = ("date", "number", "level", "file")
+        self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
+        for col, text, w in [
+            ("date", "Дата", 120), ("number", "№ наказу", 130),
+            ("level", "Рівень", 180), ("file", "Файл", 200),
+        ]:
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=w, anchor="w" if col == "file" else "center")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.tree.bind("<Double-1>", lambda _e: self._open_selected())
+
+        if not history:
+            self.tree.insert("", "end", values=("", "Немає подяк", "", ""))
+        else:
+            for item in history:
+                filename = item.get("source_filename") or ("є файл" if item.get("has_file") else "—")
+                self.tree.insert("", "end", iid=str(item["order_id"]), values=(
+                    item.get("order_date") or "",
+                    item.get("order_number") or "",
+                    item.get("level_type") or "",
+                    filename,
+                ))
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=16, pady=(4, 16))
+        ctk.CTkButton(btns, text="Відкрити файл наказу", width=180, command=self._open_selected).pack(side="left")
+        ctk.CTkButton(btns, text="Закрити", width=110, command=self.destroy).pack(side="right")
+
+    def _open_selected(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("Файл наказу", "Оберіть рядок наказу в таблиці.")
+            return
+        order_id = selected[0]
+        item = next((h for h in self.history if str(h["order_id"]) == str(order_id)), None)
+        if not item or not item.get("has_file"):
+            messagebox.showinfo("Файл наказу", "До цього наказу файл не прикріплено.")
+            return
+        try:
+            self.open_file_fn(item["order_id"])
+        except Exception as exc:
+            messagebox.showerror("Не вдалося відкрити файл", str(exc))
+
+
 class StudentManagementApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("DocFlow — документообіг")
+        self.title("Актив+ — документообіг")
         self.minsize(1100, 700)
+
+        # Встановлення іконки програми
+        icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.ico")
+        if os.path.exists(icon_path):
+            try:
+                self.iconbitmap(icon_path)
+            except Exception:
+                pass  # Якщо іконку не вдалося встановити, програма продовжує роботу
 
         self.app_config = cfg.load_config()
         ctk.set_appearance_mode(self.app_config.get("appearance_mode", "Light"))
@@ -386,6 +466,8 @@ class StudentManagementApp(ctk.CTk):
 
         self.loaded_data = None
         self.loaded_reward_data = None
+        self.loaded_teachers_data = None
+        self.import_type = "students"
         self.selected_group_id = None
         self.selected_db_table = None
         self._db_table_by_label = {}
@@ -445,17 +527,18 @@ class StudentManagementApp(ctk.CTk):
         self.sidebar.grid(row=0, column=0, rowspan=4, sticky="nsw")
         self.sidebar.grid_propagate(False)
 
-        self.sidebar_title = ctk.CTkLabel(self.sidebar, text="DocFlow", font=("Segoe UI", 22, "bold"), text_color="#ffffff")
+        self.sidebar_title = ctk.CTkLabel(self.sidebar, text="Актив+", font=("Segoe UI", 22, "bold"), text_color="#ffffff")
         self.sidebar_title.pack(anchor="w", padx=22, pady=(28, 2))
         self.sidebar_caption = ctk.CTkLabel(self.sidebar, text="Документообіг", font=("Segoe UI", 12), text_color="#adb5bd")
         self.sidebar_caption.pack(anchor="w", padx=22, pady=(0, 28))
 
         self.nav_buttons = {}
         nav_items = [
-            ("import", "Імпорт"),
+            ("import", "Імпорт списків"),
             ("students", "Студенти"),
             ("rewards", "Накази"),
-            ("rating", "Рейтинг"),
+            ("rating", "Рейтинг студентів"),
+            ("teacher_rewards", "Подяки викладачів"),
             ("db", "База даних"),
         ]
         for key, label in nav_items:
@@ -490,7 +573,6 @@ class StudentManagementApp(ctk.CTk):
 
         actions = ctk.CTkFrame(top_frame, fg_color="transparent")
         actions.grid(row=0, column=3, sticky="e")
-        ctk.CTkButton(actions, text="Оновити", width=100, fg_color="#1d4e89", command=self.refresh_all_views).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="Експорт рейтингу", width=150, fg_color="#1d4e89", command=self.export_rating).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="Зберегти копію", width=130, fg_color="#1d4e89", command=self.save_database_backup).pack(side="left", padx=4)
 
@@ -516,12 +598,14 @@ class StudentManagementApp(ctk.CTk):
         self.tab_view_students = self._make_page("students")
         self.tab_rewards = self._make_page("rewards")
         self.tab_rating = self._make_page("rating")
+        self.tab_teacher_rewards = self._make_page("teacher_rewards")
         self.tab_db = self._make_page("db")
 
         self.setup_import_tab()
         self.setup_view_students_tab()
         self.setup_rewards_tab()
         self.setup_rating_tab()
+        self.setup_teacher_rewards_tab()
         self.setup_db_tab()
         self.show_page("import")
 
@@ -644,6 +728,7 @@ class StudentManagementApp(ctk.CTk):
             return
         self.refresh_groups_dropdown()
         self.load_rating_data()
+        self.load_teacher_rewards_data()
         self.refresh_db_sidebar_tables()
 
     # -- обслуговування БД -------------------------------------------------
@@ -695,8 +780,8 @@ class StudentManagementApp(ctk.CTk):
         stamp = datetime.now().strftime("%Y-%m-%d")
         file_path = filedialog.asksaveasfilename(
             defaultextension=".bak",
-            initialfile=f"DocFlow_backup_{stamp}.bak",
-            filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
+            initialfile=f"Aktiv_plus_backup_{stamp}.bak",
+            filetypes=[("Копія бази Актив+", "*.bak"), ("Усі файли", "*.*")],
         )
         if not file_path:
             return
@@ -710,7 +795,7 @@ class StudentManagementApp(ctk.CTk):
         if not self.require_writable():
             return
         file_path = filedialog.askopenfilename(
-            filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
+            filetypes=[("Копія бази Актив+", "*.bak"), ("Усі файли", "*.*")],
         )
         if not file_path:
             return
@@ -728,7 +813,7 @@ class StudentManagementApp(ctk.CTk):
 
     def open_backup_view(self):
         file_path = filedialog.askopenfilename(
-            filetypes=[("Копія бази DocFlow", "*.bak"), ("Усі файли", "*.*")],
+            filetypes=[("Копія бази Актив+", "*.bak"), ("Усі файли", "*.*")],
         )
         if not file_path:
             return
@@ -1012,15 +1097,16 @@ class StudentManagementApp(ctk.CTk):
     # -- ВКЛАДКА 1: ІМПОРТ З WORD -------------------------------------------
     def setup_import_tab(self):
         self.tab_import.grid_columnconfigure(0, weight=1)
-        self.tab_import.grid_rowconfigure(1, weight=1)
+        self.tab_import.grid_rowconfigure(2, weight=1)
 
         top_panel = ctk.CTkFrame(self.tab_import, fg_color="transparent")
         top_panel.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
         ctk.CTkButton(top_panel, text="Відкрити списки груп", command=self.browse_student_files).pack(side="left", padx=5)
-        self.lbl_import_status = ctk.CTkLabel(top_panel, text="Оберіть один або кілька файлів Word зі списками груп")
+        ctk.CTkButton(top_panel, text="Відкрити списки викладачів", command=self.browse_teacher_files).pack(side="left", padx=5)
+        self.lbl_import_status = ctk.CTkLabel(top_panel, text="Оберіть один або кілька файлів Word зі списками")
         self.lbl_import_status.pack(side="left", padx=15)
-        self.save_import_btn = ctk.CTkButton(top_panel, text="Створити групи та зберегти в БД", fg_color="#1864ab", state="disabled", command=self.save_parsed_to_db)
+        self.save_import_btn = ctk.CTkButton(top_panel, text="Зберегти в БД", fg_color="#1864ab", state="disabled", command=self.save_import_to_db)
         self.save_import_btn.pack(side="right", padx=5)
 
         self.import_textbox = ctk.CTkTextbox(self.tab_import, font=("Consolas", 12))
@@ -1059,6 +1145,7 @@ class StudentManagementApp(ctk.CTk):
             return
         self.lbl_import_status.configure(text=f"Розпізнавання {len(paths)} файл(ів)...")
         self.save_import_btn.configure(state="disabled")
+        self.import_type = "students"
 
         def work():
             results = []
@@ -1099,25 +1186,79 @@ class StudentManagementApp(ctk.CTk):
 
         run_async(self, work, on_success, on_error)
 
-    def save_parsed_to_db(self):
-        if not self.loaded_data or not self.require_writable():
+    def browse_teacher_files(self):
+        path = filedialog.askopenfilename(filetypes=[("Word Documents", "*.docx;*.doc"), ("All Files", "*.*")])
+        if not path:
             return
+        self.lbl_import_status.configure(text=f"Розпізнавання: {os.path.basename(path)}...")
+        self.save_import_btn.configure(state="disabled")
+        self.import_type = "teachers"
 
         def work():
-            for grp_name, data in self.loaded_data.items():
-                group_id = self.db.upsert_group(grp_name, data["study_year"], data["curator"])
-                for s in data["students"]:
-                    self.db.upsert_student(s["full_name"], group_id, s["funding"], s["note"])
+            from parsers.teachers_parser import parse_teachers_list
+            teachers = parse_teachers_list(path)
+            return teachers
 
-        def on_success(_):
-            messagebox.showinfo("Успіх", "Усі групи та списки студентів успішно збережені в базі даних!")
-            self.refresh_all_views()
-            self.show_page("students")
+        def on_success(teachers):
+            self.loaded_teachers_data = teachers
+            self.lbl_import_status.configure(text=f"Файл: {os.path.basename(path)}")
+            self.import_textbox.delete("0.0", "end")
+
+            summary = f"Знайдено викладачів: {len(teachers)}\n" + "=" * 80 + "\n\n"
+            for idx, t in enumerate(teachers, 1):
+                summary += f"{idx:<4} | {t['full_name']:<35} | {t['position']}\n"
+            self.import_textbox.insert("end", summary)
+            self.save_import_btn.configure(state="normal" if teachers else "disabled")
+
+            if not teachers:
+                messagebox.showwarning("Нічого не знайдено", "У документі не вдалося розпізнати жодного викладача.")
 
         def on_error(exc):
-            messagebox.showerror("Помилка запису в БД", str(exc))
+            self.lbl_import_status.configure(text="Помилка розпізнавання")
+            messagebox.showerror("Помилка парсингу", str(exc))
 
         run_async(self, work, on_success, on_error)
+
+    def save_import_to_db(self):
+        if not self.require_writable():
+            return
+
+        if getattr(self, "import_type", "students") == "students":
+            if not self.loaded_data:
+                return
+
+            def work():
+                for grp_name, data in self.loaded_data.items():
+                    group_id = self.db.upsert_group(grp_name, data["study_year"], data["curator"])
+                    for s in data["students"]:
+                        self.db.upsert_student(s["full_name"], group_id, s["funding"], s["note"])
+
+            def on_success(_):
+                messagebox.showinfo("Успіх", "Усі групи та списки студентів успішно збережені в базі даних!")
+                self.refresh_all_views()
+                self.show_page("students")
+
+            def on_error(exc):
+                messagebox.showerror("Помилка запису в БД", str(exc))
+
+            run_async(self, work, on_success, on_error)
+        else:  # teachers
+            if not self.loaded_teachers_data:
+                return
+
+            def work():
+                for t in self.loaded_teachers_data:
+                    self.db.upsert_teacher(t["full_name"], t["position"])
+
+            def on_success(_):
+                messagebox.showinfo("Успіх", "Усі викладачі успішно збережені в базі даних!")
+                self.refresh_all_views()
+                self.show_page("teacher_rewards")
+
+            def on_error(exc):
+                messagebox.showerror("Помилка запису в БД", str(exc))
+
+            run_async(self, work, on_success, on_error)
 
     # -- ВКЛАДКА 2: СПИСКИ СТУДЕНТІВ -----------------------------------------
     def setup_view_students_tab(self):
@@ -1130,8 +1271,6 @@ class StudentManagementApp(ctk.CTk):
         ctk.CTkLabel(ctrl_frame, text="Оберіть групу:").pack(side="left", padx=5)
         self.group_dropdown = ctk.CTkOptionMenu(ctrl_frame, values=["(Немає груп)"], command=self.load_group_students)
         self.group_dropdown.pack(side="left", padx=5)
-        ctk.CTkButton(ctrl_frame, text="Оновити", width=90, command=self.refresh_all_views).pack(side="left", padx=10)
-        ctk.CTkButton(ctrl_frame, text="Експорт групи (.xlsx)", width=150, command=self.export_current_group).pack(side="left", padx=10)
 
         self.lbl_group_info = ctk.CTkLabel(self.tab_view_students, text="Куратор: — | Навчальний рік: —", font=("Segoe UI", 13, "bold"))
         self.lbl_group_info.grid(row=1, column=0, padx=10, pady=5, sticky="w")
@@ -1395,7 +1534,7 @@ class StudentManagementApp(ctk.CTk):
             MatchResolutionDialog(self, st["full_name"], candidates, resolved)
 
     def save_reward_to_db(self):
-        if not self.loaded_reward_data or not self.loaded_reward_data["students"] or not self.require_writable():
+        if not self.loaded_reward_data or not self.loaded_reward_data["students"] and not self.loaded_reward_data.get("teachers") or not self.require_writable():
             return
         unmatched = [s for s in self.loaded_reward_data["students"] if not s.get("matched_id")]
         if unmatched:
@@ -1426,11 +1565,21 @@ class StudentManagementApp(ctk.CTk):
                     pts = applied_points(data.get("order_kind"), data["points"])
                     self.db.add_achievement(st["matched_id"], order_id, pts)
                     count += 1
-            return count
+            teacher_count = 0
+            for teacher in data.get("teachers", []):
+                teacher_id = self.db.upsert_teacher(teacher["full_name"])
+                self.db.add_teacher_reward(teacher_id, order_id)
+                teacher_count += 1
+            return count, teacher_count
 
-        def on_success(count):
-            messagebox.showinfo("Успіх", f"Наказ збережено. Оновлено бали для {count} студентів.")
+        def on_success(result):
+            student_count, teacher_count = result
+            msg = f"Наказ збережено. Оновлено бали для {student_count} студентів."
+            if teacher_count > 0:
+                msg += f" Додано подяки для {teacher_count} викладачів."
+            messagebox.showinfo("Успіх", msg)
             self.load_rating_data()
+            self.load_teacher_rewards_data()
             self.refresh_db_sidebar_tables()
             self.show_page("rating")
 
@@ -1439,7 +1588,95 @@ class StudentManagementApp(ctk.CTk):
 
         run_async(self, work, on_success, on_error)
 
-    # -- ВКЛАДКА 4: РЕЙТИНГ СТУДЕНТІВ ----------------------------------------
+    # -- ВКЛАДКА 5: ПОДЯКИ ВИКЛАДАЧІВ -----------------------------------------
+    def setup_teacher_rewards_tab(self):
+        self.tab_teacher_rewards.grid_columnconfigure(0, weight=1)
+        self.tab_teacher_rewards.grid_rowconfigure(1, weight=1)
+
+        rt_top = ctk.CTkFrame(self.tab_teacher_rewards, fg_color="transparent")
+        rt_top.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        ctk.CTkButton(rt_top, text="Експорт у Excel", width=140, command=self.export_teacher_rewards).pack(side="left", padx=4)
+
+        rt_frame = ctk.CTkFrame(self.tab_teacher_rewards)
+        rt_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+        rt_frame.grid_columnconfigure(0, weight=1)
+        rt_frame.grid_rowconfigure(0, weight=1)
+
+        columns = ("num", "name", "position", "count", "orders")
+        self.teacher_rewards_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
+        for col, text, w in [
+            ("num", "№", 40), ("name", "ПІБ викладача", 260), ("position", "Посада", 200),
+            ("count", "Кількість подяк", 100), ("orders", "Накази", 420),
+        ]:
+            self.teacher_rewards_tree.heading(col, text=text)
+            self.teacher_rewards_tree.column(col, width=w, anchor="center" if col in ("num", "count") else "w")
+
+        rt_scroll = ttk.Scrollbar(rt_frame, orient="vertical", command=self.teacher_rewards_tree.yview)
+        self.teacher_rewards_tree.configure(yscrollcommand=rt_scroll.set)
+        self.teacher_rewards_tree.grid(row=0, column=0, sticky="nsew")
+        rt_scroll.grid(row=0, column=1, sticky="ns")
+        self.teacher_rewards_tree.bind("<Double-1>", self.on_teacher_reward_open)
+        self._treeviews.append(self.teacher_rewards_tree)
+
+        ctk.CTkLabel(self.tab_teacher_rewards, text="Двічі клацніть викладача, щоб побачити подяки та відкрити файл документа.", text_color="gray").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+
+    def load_teacher_rewards_data(self):
+        if not self.db or not self.db.is_connected():
+            return
+        try:
+            stats = self.db.get_teacher_stats()
+            details = self.db.get_teacher_rewards()
+            by_id = {}
+            for item in details:
+                by_id.setdefault(item["teacher_id"], []).append(item)
+            for row in self.teacher_rewards_tree.get_children():
+                self.teacher_rewards_tree.delete(row)
+            for idx, r in enumerate(stats, 1):
+                tag = "odd" if idx % 2 else "even"
+                teacher_details = by_id.get(r["teacher_id"], [])
+                summary = "; ".join(f"№{item['order_number']} від {item['order_date']}" for item in teacher_details) or "—"
+                self.teacher_rewards_tree.insert(
+                    "", "end", iid=str(r["teacher_id"]),
+                    values=(idx, r["full_name"], r["position"], r["reward_count"], summary),
+                    tags=(tag,),
+                )
+        except Exception:
+            logger.exception("load_teacher_rewards_data")
+
+    def on_teacher_reward_open(self, _event=None):
+        selected = self.teacher_rewards_tree.selection()
+        if not selected or not self.require_db():
+            return
+        teacher_id = int(selected[0])
+        values = self.teacher_rewards_tree.item(selected)["values"]
+        history = self.db.get_teacher_history(teacher_id)
+        TeacherHistoryDialog(
+            self,
+            teacher_name=values[1],
+            position=values[2],
+            reward_count=values[3],
+            history=history,
+            open_file_fn=self.open_order_attachment,
+        )
+
+    def export_teacher_rewards(self):
+        if not self.require_db():
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx", initialfile="Подяки_викладачів.xlsx",
+            filetypes=[("Excel файли", "*.xlsx")],
+        )
+        if not file_path:
+            return
+        try:
+            stats = self.db.get_teacher_stats()
+            details = self.db.get_teacher_rewards()
+            export.export_teacher_rewards_to_xlsx(stats, file_path, detail_rows=details)
+            messagebox.showinfo("Успіх", f"Подяки викладачів збережено:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Помилка експорту", str(e))
+
+    # -- ВКЛАДКА 6: РЕЙТИНГ СТУДЕНТІВ ----------------------------------------
     def setup_rating_tab(self):
         self.tab_rating.grid_columnconfigure(0, weight=1)
         self.tab_rating.grid_rowconfigure(1, weight=1)
@@ -1449,8 +1686,6 @@ class StudentManagementApp(ctk.CTk):
         ctk.CTkLabel(rt_top, text="Фільтр за групою:").pack(side="left", padx=5)
         self.rating_group_dropdown = ctk.CTkOptionMenu(rt_top, values=["Усі групи"], command=lambda _: self.load_rating_data())
         self.rating_group_dropdown.pack(side="left", padx=5)
-        ctk.CTkButton(rt_top, text="Оновити", width=110, command=self.load_rating_data).pack(side="left", padx=8)
-        ctk.CTkButton(rt_top, text="Експорт у Excel", width=140, command=self.export_rating).pack(side="left", padx=4)
 
         rt_frame = ctk.CTkFrame(self.tab_rating)
         rt_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
