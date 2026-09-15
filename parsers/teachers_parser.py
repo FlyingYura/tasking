@@ -65,7 +65,7 @@ def _normalize_name(text):
 
 
 def parse_teachers_list(file_path):
-    """Повертає список {full_name, position}."""
+    """Повертає список {full_name}."""
     doc, temp_path = open_word_document(file_path)
     try:
         names = []
@@ -95,11 +95,7 @@ def parse_teachers_list(file_path):
                 return
             seen.add(key)
             
-            position = "—"
-            dash = re.search(r"\s+[–-]\s+(.+)$", text)
-            if dash and not _looks_like_full_name_relaxed(dash.group(1)):
-                position = dash.group(1).strip()[:150]
-            names.append({"full_name": normalized, "position": position})
+            names.append({"full_name": normalized})
 
         for table in doc.tables:
             for row in table.rows:

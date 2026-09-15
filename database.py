@@ -37,7 +37,7 @@ ALLOWED_TABLES = {
     "students": ["full_name", "funding", "note"],
     "orders": ["order_number", "order_date", "level_type", "default_points"],
     "achievements": ["points_awarded"],
-    "teachers": ["full_name", "position"],
+    "teachers": ["full_name"],
     "teacher_rewards": [],
 }
 
@@ -134,8 +134,7 @@ class Database:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS teachers (
                     id SERIAL PRIMARY KEY,
-                    full_name VARCHAR(200) NOT NULL UNIQUE,
-                    position VARCHAR(150) DEFAULT '—'
+                    full_name VARCHAR(200) NOT NULL UNIQUE
                 );
             """)
             cur.execute("""
@@ -315,22 +314,22 @@ class Database:
             ]
 
     # -- викладачі / подяки викладачів ----------------------------------------
-    def upsert_teacher(self, full_name, position="—"):
+    def upsert_teacher(self, full_name):
         with self.cursor() as cur:
             cur.execute("""
-                INSERT INTO teachers (full_name, position)
-                VALUES (%s, %s)
+                INSERT INTO teachers (full_name)
+                VALUES (%s)
                 ON CONFLICT (full_name) DO UPDATE
-                SET position = COALESCE(EXCLUDED.position, teachers.position)
+                SET full_name = EXCLUDED.full_name
                 RETURNING id;
-            """, (full_name, position))
+            """, (full_name,))
             return cur.fetchone()[0]
 
     def get_all_teachers(self):
         with self.cursor() as cur:
-            cur.execute("SELECT id, full_name, position FROM teachers ORDER BY full_name;")
+            cur.execute("SELECT id, full_name FROM teachers ORDER BY full_name;")
             return [
-                {"id": r[0], "full_name": r[1], "position": r[2]}
+                {"id": r[0], "full_name": r[1]}
                 for r in cur.fetchall()
             ]
 
@@ -346,7 +345,7 @@ class Database:
         """Всі подяки викладачів з реквізитами наказу — для Excel-експорту."""
         with self.cursor() as cur:
             cur.execute("""
-                SELECT t.id, t.full_name, t.position,
+                SELECT t.id, t.full_name,
                        o.order_number, o.order_date, o.level_type, o.source_filename
                 FROM teacher_rewards tr
                 JOIN teachers t ON t.id = tr.teacher_id
@@ -357,11 +356,10 @@ class Database:
                 {
                     "teacher_id": r[0],
                     "full_name": r[1],
-                    "position": r[2],
-                    "order_number": r[3],
-                    "order_date": r[4],
-                    "level_type": r[5],
-                    "source_filename": r[6],
+                    "order_number": r[2],
+                    "order_date": r[3],
+                    "level_type": r[4],
+                    "source_filename": r[5],
                 }
                 for r in cur.fetchall()
             ]
@@ -370,18 +368,17 @@ class Database:
         """Статистика подяок викладачів: кількість подяк для кожного викладача."""
         with self.cursor() as cur:
             cur.execute("""
-                SELECT t.id, t.full_name, t.position, COUNT(tr.order_id) as reward_count
+                SELECT t.id, t.full_name, COUNT(tr.order_id) as reward_count
                 FROM teachers t
                 LEFT JOIN teacher_rewards tr ON t.id = tr.teacher_id
-                GROUP BY t.id, t.full_name, t.position
+                GROUP BY t.id, t.full_name
                 ORDER BY reward_count DESC, t.full_name ASC;
             """)
             return [
                 {
                     "teacher_id": r[0],
                     "full_name": r[1],
-                    "position": r[2],
-                    "reward_count": r[3] or 0,
+                    "reward_count": r[2] or 0,
                 }
                 for r in cur.fetchall()
             ]
@@ -457,7 +454,7 @@ class Database:
                 """)
             elif table_name == "teachers":
                 cur.execute("""
-                    SELECT id, full_name, position
+                    SELECT id, full_name
                     FROM teachers
                     ORDER BY full_name;
                 """)

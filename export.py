@@ -239,7 +239,7 @@ def export_teacher_rewards_to_xlsx(stats_rows, file_path, detail_rows=None):
     overall = wb.active
     overall.title = _safe_sheet_name("Подяки викладачів", used)
 
-    headers = ["№", "ПІБ викладача", "Посада", "Кількість подяк", "Накази"]
+    headers = ["№", "ПІБ викладача", "Кількість подяк", "Накази"]
     _fill_teacher_sheet(overall, "Подяки викладачів", headers, rows, numbered=True)
 
     wb.save(file_path)
@@ -289,7 +289,6 @@ def _fill_teacher_sheet(ws, title, headers, rows, numbered=True):
             values.append(idx)
         values.extend([
             row["full_name"],
-            row["position"],
             row["reward_count"],
             row.get("details_text") or "—",
         ])
@@ -302,7 +301,7 @@ def _fill_teacher_sheet(ws, title, headers, rows, numbered=True):
                 cell.fill = stripe
         ws.row_dimensions[excel_row].height = 36
 
-    widths = (8, 36, 20, 12, 70) if numbered else (36, 20, 12, 70)
+    widths = (8, 40, 12, 70) if numbered else (40, 12, 70)
     for col, width in zip(range(1, len(headers) + 1), widths):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = "A4"

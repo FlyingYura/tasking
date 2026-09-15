@@ -1,43 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 
-datas, binaries, hiddenimports = collect_all("customtkinter")
-d2, b2, h2 = collect_all("docx")
-datas += d2
-binaries += b2
-hiddenimports += h2
-
-# Додати іконку та assets
-datas += [("assets/icon.ico", "assets")]
 
 a = Analysis(
-    ["app.py"],
+    ['app.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports + [
-        "psycopg2",
-        "openpyxl",
-        "win32com",
-        "pythoncom",
-        "pywintypes",
-        "scoring",
-        "config",
-        "database",
-        "matching",
-        "export",
-        "parsers.reward_parser",
-        "parsers.students_parser",
-        "parsers.teachers_parser",
-        "parsers.doc_io",
-    ],
+    binaries=[],
+    datas=[('assets/icon.ico', 'assets')],
+    hiddenimports=['psycopg2', 'openpyxl', 'win32com', 'pythoncom', 'pywintypes', 'scoring', 'config', 'database', 'matching', 'export', 'parsers.reward_parser', 'parsers.students_parser', 'parsers.teachers_parser', 'parsers.doc_io', 'customtkinter', 'docx'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
+    optimize=0,
 )
-
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -46,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="Aktiv_plus",
+    name='Aktiv_plus',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/icon.ico",
+    icon=['assets/icon.ico'],
 )
