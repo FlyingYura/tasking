@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Aktiv_plus',
+    name='DMTFK_plus',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

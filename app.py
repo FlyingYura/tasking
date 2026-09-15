@@ -486,7 +486,7 @@ class StudentManagementApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("Актив+ — документообіг")
+        self.title("ДМТФК+ — документообіг")
         self.minsize(1100, 800)
 
         # Встановлення іконки програми
@@ -566,7 +566,7 @@ class StudentManagementApp(ctk.CTk):
         self.sidebar.grid(row=0, column=0, rowspan=4, sticky="nsw")
         self.sidebar.grid_propagate(False)
 
-        self.sidebar_title = ctk.CTkLabel(self.sidebar, text="Актив+", font=("Segoe UI", 22, "bold"), text_color="#ffffff")
+        self.sidebar_title = ctk.CTkLabel(self.sidebar, text="ДМТФК+", font=("Segoe UI", 22, "bold"), text_color="#ffffff")
         self.sidebar_title.pack(anchor="w", padx=22, pady=(28, 2))
         self.sidebar_caption = ctk.CTkLabel(self.sidebar, text="Документообіг", font=("Segoe UI", 12), text_color="#adb5bd")
         self.sidebar_caption.pack(anchor="w", padx=22, pady=(0, 28))
@@ -820,7 +820,7 @@ class StudentManagementApp(ctk.CTk):
         file_path = filedialog.asksaveasfilename(
             defaultextension=".bak",
             initialfile=f"Aktiv_plus_backup_{stamp}.bak",
-            filetypes=[("Копія бази Актив+", "*.bak"), ("Усі файли", "*.*")],
+            filetypes=[("Копія бази ДМТФК+", "*.bak"), ("Усі файли", "*.*")],
         )
         if not file_path:
             return
@@ -834,7 +834,7 @@ class StudentManagementApp(ctk.CTk):
         if not self.require_writable():
             return
         file_path = filedialog.askopenfilename(
-            filetypes=[("Копія бази Актив+", "*.bak"), ("Усі файли", "*.*")],
+            filetypes=[("Копія бази ДМТФК+", "*.bak"), ("Усі файли", "*.*")],
         )
         if not file_path:
             return
@@ -852,7 +852,7 @@ class StudentManagementApp(ctk.CTk):
 
     def open_backup_view(self):
         file_path = filedialog.askopenfilename(
-            filetypes=[("Копія бази Актив+", "*.bak"), ("Усі файли", "*.*")],
+            filetypes=[("Копія бази ДМТФК+", "*.bak"), ("Усі файли", "*.*")],
         )
         if not file_path:
             return
@@ -913,6 +913,9 @@ class StudentManagementApp(ctk.CTk):
             ctrl_sb, text="Скасувати", width=110, command=self._cancel_inline_edit
         ).pack(side="right", padx=4)
         ctk.CTkButton(
+            ctrl_sb, text="Додати рядок", fg_color="#1864ab", width=130, command=self.add_new_db_row
+        ).pack(side="right", padx=8)
+        ctk.CTkButton(
             ctrl_sb, text="Видалити рядок", fg_color="#c92a2a", width=130, command=self.delete_selected_db_row
         ).pack(side="right", padx=8)
 
@@ -934,7 +937,7 @@ class StudentManagementApp(ctk.CTk):
 
         self.db_hint = ctk.CTkLabel(
             self.tab_db,
-            text="Двічі клацніть клітинку, щоб редагувати. У таблиці наказів двічі клацніть «Файл наказу», щоб відкрити документ.",
+            text="Двічі клацніть клітинку, щоб редагувати. У таблиці наказів двічі клацніть «Файл наказу», щоб відкрити документ. «Додати рядок» створює нового студента, викладача або групу.",
             text_color="gray",
             wraplength=1200,
             justify="left",
@@ -1017,6 +1020,164 @@ class StudentManagementApp(ctk.CTk):
                 self.db_tree.insert("", "end", values=r, tags=(tag,))
         except Exception as e:
             messagebox.showerror("Помилка БД", str(e))
+
+    def add_new_db_row(self):
+        self._cancel_inline_edit()
+        if not self.require_writable():
+            return
+        if not self.selected_db_table:
+            return
+
+        if self.selected_db_table == "students":
+            self._add_new_student()
+        elif self.selected_db_table == "teachers":
+            self._add_new_teacher()
+        elif self.selected_db_table == "groups":
+            self._add_new_group()
+        else:
+            messagebox.showinfo("Інформація", f"Додавання нових рядків для таблиці «{TABLE_LABELS.get(self.selected_db_table, self.selected_db_table)}» не підтримується через цей інтерфейс. Використовуйте імпорт з Word документів.")
+
+    def _add_new_student(self):
+        # Створюємо діалог для додавання нового студента
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Додати студента")
+        dialog.geometry("500x400")
+        dialog.grab_set()
+
+        # Отримуємо список груп
+        groups = []
+        try:
+            groups = self.db.get_groups()
+        except Exception:
+            pass
+
+        group_names = [g[1] for g in groups] if groups else []
+        group_ids = {g[1]: g[0] for g in groups} if groups else {}
+
+        # Форма
+        ctk.CTkLabel(dialog, text="ПІБ студента:", font=("Segoe UI", 12)).pack(padx=20, pady=(20, 5), anchor="w")
+        name_entry = ctk.CTkEntry(dialog, width=400)
+        name_entry.pack(padx=20, pady=5)
+
+        ctk.CTkLabel(dialog, text="Група:", font=("Segoe UI", 12)).pack(padx=20, pady=(10, 5), anchor="w")
+        group_dropdown = ctk.CTkOptionMenu(dialog, values=group_names or ["Немає груп"], width=400)
+        group_dropdown.pack(padx=20, pady=5)
+        if group_names:
+            group_dropdown.set(group_names[0])
+
+        ctk.CTkLabel(dialog, text="Фінансування:", font=("Segoe UI", 12)).pack(padx=20, pady=(10, 5), anchor="w")
+        funding_entry = ctk.CTkEntry(dialog, width=400, placeholder_text="К - контракт, ДЗ - державне замовлення")
+        funding_entry.pack(padx=20, pady=5)
+        funding_entry.insert(0, "К")
+
+        ctk.CTkLabel(dialog, text="Примітка:", font=("Segoe UI", 12)).pack(padx=20, pady=(10, 5), anchor="w")
+        note_entry = ctk.CTkEntry(dialog, width=400, placeholder_text="Додаткова інформація")
+        note_entry.pack(padx=20, pady=5)
+        note_entry.insert(0, "—")
+
+        def save_student():
+            name = name_entry.get().strip()
+            group_name = group_dropdown.get()
+            funding = funding_entry.get().strip()
+            note = note_entry.get().strip()
+
+            if not name:
+                messagebox.showerror("Помилка", "Введіть ПІБ студента")
+                return
+            if not group_name or group_name == "Немає груп":
+                messagebox.showerror("Помилка", "Оберіть групу")
+                return
+            if group_name not in group_ids:
+                messagebox.showerror("Помилка", "Невірна група")
+                return
+
+            try:
+                group_id = group_ids[group_name]
+                self.db.upsert_student(name, group_id, funding or "К", note or "—")
+                self.load_db_table_data(self.selected_db_table)
+                self.refresh_all_views()
+                dialog.destroy()
+                messagebox.showinfo("Успіх", "Студента успішно додано")
+            except Exception as e:
+                messagebox.showerror("Помилка", f"Не вдалося додати студента: {e}")
+
+        ctk.CTkButton(dialog, text="Зберегти", fg_color="#2b8a3e", command=save_student).pack(pady=20)
+        ctk.CTkButton(dialog, text="Скасувати", command=dialog.destroy).pack(pady=5)
+
+    def _add_new_teacher(self):
+        # Створюємо діалог для додавання нового викладача
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Додати викладача")
+        dialog.geometry("400x250")
+        dialog.grab_set()
+
+        # Форма
+        ctk.CTkLabel(dialog, text="ПІБ викладача:", font=("Segoe UI", 12)).pack(padx=20, pady=(20, 5), anchor="w")
+        name_entry = ctk.CTkEntry(dialog, width=350)
+        name_entry.pack(padx=20, pady=5)
+
+        def save_teacher():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showerror("Помилка", "Введіть ПІБ викладача")
+                return
+
+            try:
+                self.db.upsert_teacher(name)
+                self.load_db_table_data(self.selected_db_table)
+                self.refresh_all_views()
+                dialog.destroy()
+                messagebox.showinfo("Успіх", "Викладача успішно додано")
+            except Exception as e:
+                messagebox.showerror("Помилка", f"Не вдалося додати викладача: {e}")
+
+        ctk.CTkButton(dialog, text="Зберегти", fg_color="#2b8a3e", command=save_teacher).pack(pady=20)
+        ctk.CTkButton(dialog, text="Скасувати", command=dialog.destroy).pack(pady=5)
+
+    def _add_new_group(self):
+        # Створюємо діалог для додавання нової групи
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Додати групу")
+        dialog.geometry("400x350")
+        dialog.grab_set()
+
+        # Форма
+        ctk.CTkLabel(dialog, text="Назва групи:", font=("Segoe UI", 12)).pack(padx=20, pady=(20, 5), anchor="w")
+        name_entry = ctk.CTkEntry(dialog, width=350, placeholder_text="Наприклад: ЕК-11")
+        name_entry.pack(padx=20, pady=5)
+
+        ctk.CTkLabel(dialog, text="Навчальний рік:", font=("Segoe UI", 12)).pack(padx=20, pady=(10, 5), anchor="w")
+        year_entry = ctk.CTkEntry(dialog, width=350, placeholder_text="Наприклад: 2025/2026")
+        year_entry.pack(padx=20, pady=5)
+
+        ctk.CTkLabel(dialog, text="Куратор:", font=("Segoe UI", 12)).pack(padx=20, pady=(10, 5), anchor="w")
+        curator_entry = ctk.CTkEntry(dialog, width=350, placeholder_text="ПІБ куратора")
+        curator_entry.pack(padx=20, pady=5)
+        curator_entry.insert(0, "Не вказано")
+
+        def save_group():
+            name = name_entry.get().strip()
+            year = year_entry.get().strip()
+            curator = curator_entry.get().strip()
+
+            if not name:
+                messagebox.showerror("Помилка", "Введіть назву групи")
+                return
+            if not year:
+                messagebox.showerror("Помилка", "Введіть навчальний рік")
+                return
+
+            try:
+                self.db.upsert_group(name, year, curator or "Не вказано")
+                self.load_db_table_data(self.selected_db_table)
+                self.refresh_all_views()
+                dialog.destroy()
+                messagebox.showinfo("Успіх", "Групу успішно додано")
+            except Exception as e:
+                messagebox.showerror("Помилка", f"Не вдалося додати групу: {e}")
+
+        ctk.CTkButton(dialog, text="Зберегти", fg_color="#2b8a3e", command=save_group).pack(pady=20)
+        ctk.CTkButton(dialog, text="Скасувати", command=dialog.destroy).pack(pady=5)
 
     def delete_selected_db_row(self):
         self._cancel_inline_edit()
