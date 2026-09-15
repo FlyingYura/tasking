@@ -187,6 +187,52 @@ class TestStudentsParser(unittest.TestCase):
         self.assertTrue(any("25+" in n for n in notes))
 
 
+class TestTeacherMatching(unittest.TestCase):
+    def setUp(self):
+        self.teachers = [
+            {"id": 1, "full_name": "Бойчук Іван Петрович"},
+            {"id": 2, "full_name": "Мельник Оксана Василівна"},
+            {"id": 3, "full_name": "Коваль Сергій Миколайович"},
+            {"id": 4, "full_name": "Шевченко Тарас Григорович"},
+        ]
+
+    def test_exact_teacher_name_matches_confidently(self):
+        match, score, _ = matching.find_best_teacher_match("Бойчук Іван Петрович", self.teachers)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["id"], 1)
+        self.assertGreaterEqual(score, 0.9)
+
+    def test_reordered_teacher_name_still_matches(self):
+        # накази часто пишуть "Ім'я ПРІЗВИЩЕ" замість "Прізвище Ім'я"
+        # використовуємо трохи нижчий поріг для reordered імен
+        match, score, _ = matching.find_best_teacher_match("Іван Петрович Бойчук", self.teachers, threshold=0.65)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["id"], 1)
+
+    def test_similar_teacher_names_are_not_confused(self):
+        # перевіряємо, що схожі імена не плутаються
+        match, score, _ = matching.find_best_teacher_match("Коваль Сергій Миколайович", self.teachers)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["id"], 3)
+
+    def test_unknown_teacher_name_is_not_matched_blindly(self):
+        match, score, candidates = matching.find_best_teacher_match("Нікітенко Тарас Юрійович", self.teachers, threshold=0.72)
+        self.assertIsNone(match)
+
+    def test_best_teacher_guess_is_still_returned_below_threshold(self):
+        # Навіть якщо впевненість нижча за поріг, інтерфейс має що показати
+        match, score, candidates = matching.find_best_teacher_match("Бойчук Петро", self.teachers, threshold=0.9)
+        self.assertIsNone(match)
+        self.assertTrue(len(candidates) > 0)
+        # Найкращий варіант має бути Бойчук Іван Петрович
+        self.assertEqual(candidates[0]["id"], 1)
+
+    def test_case_insensitive_matching(self):
+        match, score, _ = matching.find_best_teacher_match("бойчук іван петрович", self.teachers)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["id"], 1)
+
+
 class TestMultiFileImportMerge(unittest.TestCase):
     def test_merge_combines_groups_and_dedupes_students_across_files(self):
         import app

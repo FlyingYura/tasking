@@ -289,6 +289,45 @@ class MatchResolutionDialog(ctk.CTkToplevel):
         self.on_resolved(chosen)
 
 
+class TeacherMatchResolutionDialog(ctk.CTkToplevel):
+    """Ручне підтвердження викладача, якого не вдалося однозначно
+    розпізнати автоматично. Аналогічно до діалогу для студентів."""
+
+    def __init__(self, master, candidate_name, candidate_options, on_resolved):
+        super().__init__(master)
+        self.title("Підтвердіть викладача")
+        self.geometry("420x260")
+        self.grab_set()
+        self.on_resolved = on_resolved
+
+        ctk.CTkLabel(
+            self, text=f"У наказі знайдено: «{candidate_name}»\nОберіть відповідного викладача з бази:",
+            justify="left",
+        ).pack(padx=20, pady=(20, 10), anchor="w")
+
+        options_display = [f"{t['full_name']}" for t in candidate_options]
+        options_display.append("— жоден із запропонованих —")
+
+        self.choice = ctk.CTkOptionMenu(self, values=options_display or ["— немає варіантів —"], width=350)
+        self.choice.pack(padx=20, pady=10)
+        if options_display:
+            self.choice.set(options_display[0])
+
+        self.candidate_options = candidate_options
+
+        ctk.CTkButton(self, text="Підтвердити", fg_color="#2b8a3e", command=self._confirm).pack(pady=15)
+
+    def _confirm(self):
+        selected = self.choice.get()
+        chosen = None
+        for t in self.candidate_options:
+            if selected == t["full_name"]:
+                chosen = t
+                break
+        self.destroy()
+        self.on_resolved(chosen)
+
+
 def open_attachment_bytes(filename, blob):
     if not blob:
         raise FileNotFoundError("До цього наказу файл не прикріплено.")
@@ -376,7 +415,7 @@ class StudentHistoryDialog(ctk.CTkToplevel):
 
 
 class TeacherHistoryDialog(ctk.CTkToplevel):
-    def __init__(self, master, teacher_name, position, reward_count, history, open_file_fn):
+    def __init__(self, master, teacher_name, reward_count, history, open_file_fn):
         super().__init__(master)
         self.title(f"Подяки: {teacher_name}")
         self.geometry("860x460")
@@ -386,7 +425,7 @@ class TeacherHistoryDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             self,
-            text=f"{teacher_name}  ·  {position}  ·  кількість подяк: {reward_count}",
+            text=f"{teacher_name}  ·  кількість подяк: {reward_count}",
             font=("Segoe UI", 14, "bold"),
             justify="left",
         ).pack(padx=16, pady=(16, 8), anchor="w")
@@ -448,7 +487,7 @@ class StudentManagementApp(ctk.CTk):
         super().__init__()
 
         self.title("Актив+ — документообіг")
-        self.minsize(1100, 700)
+        self.minsize(1100, 800)
 
         # Встановлення іконки програми
         icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.ico")
@@ -1097,7 +1136,7 @@ class StudentManagementApp(ctk.CTk):
     # -- ВКЛАДКА 1: ІМПОРТ З WORD -------------------------------------------
     def setup_import_tab(self):
         self.tab_import.grid_columnconfigure(0, weight=1)
-        self.tab_import.grid_rowconfigure(2, weight=1)
+        self.tab_import.grid_rowconfigure(1, weight=1)
 
         top_panel = ctk.CTkFrame(self.tab_import, fg_color="transparent")
         top_panel.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
@@ -1109,8 +1148,9 @@ class StudentManagementApp(ctk.CTk):
         self.save_import_btn = ctk.CTkButton(top_panel, text="Зберегти в БД", fg_color="#1864ab", state="disabled", command=self.save_import_to_db)
         self.save_import_btn.pack(side="right", padx=5)
 
+        # Збільшуємо простір для текстового поля - менше відступів
         self.import_textbox = ctk.CTkTextbox(self.tab_import, font=("Consolas", 12))
-        self.import_textbox.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+        self.import_textbox.grid(row=1, column=0, padx=10, pady=(5, 5), sticky="nsew")
 
     @staticmethod
     def _merge_parsed_groups(all_results):
@@ -1206,7 +1246,7 @@ class StudentManagementApp(ctk.CTk):
 
             summary = f"Знайдено викладачів: {len(teachers)}\n" + "=" * 80 + "\n\n"
             for idx, t in enumerate(teachers, 1):
-                summary += f"{idx:<4} | {t['full_name']:<35} | {t['position']}\n"
+                summary += f"{idx:<4} | {t['full_name']}\n"
             self.import_textbox.insert("end", summary)
             self.save_import_btn.configure(state="normal" if teachers else "disabled")
 
@@ -1248,7 +1288,7 @@ class StudentManagementApp(ctk.CTk):
 
             def work():
                 for t in self.loaded_teachers_data:
-                    self.db.upsert_teacher(t["full_name"], t["position"])
+                    self.db.upsert_teacher(t["full_name"])
 
             def on_success(_):
                 messagebox.showinfo("Успіх", "Усі викладачі успішно збережені в базі даних!")
@@ -1353,33 +1393,42 @@ class StudentManagementApp(ctk.CTk):
     def setup_rewards_tab(self):
         self.tab_rewards.grid_columnconfigure(0, weight=1)
         self.tab_rewards.grid_rowconfigure(2, weight=1)
+        self.tab_rewards.grid_rowconfigure(3, weight=1)
 
         top_p = ctk.CTkFrame(self.tab_rewards, fg_color="transparent")
         top_p.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        ctk.CTkButton(top_p, text="Відкрити наказ", command=self.browse_reward_file).pack(side="left", padx=5)
-        self.lbl_rew_status = ctk.CTkLabel(top_p, text="Файл не вибрано")
+        ctk.CTkButton(top_p, text="Відкрити наказ", command=self.browse_reward_file, fg_color="#1864ab").pack(side="left", padx=5)
+        self.lbl_rew_status = ctk.CTkLabel(top_p, text="Файл не вибрано", font=("Segoe UI", 11))
         self.lbl_rew_status.pack(side="left", padx=15)
-        self.save_rew_btn = ctk.CTkButton(top_p, text="Зберегти наказ та оновити бали в БД", fg_color="#1864ab", state="disabled", command=self.save_reward_to_db)
+        self.save_rew_btn = ctk.CTkButton(top_p, text="Зберегти наказ та оновити бали в БД", fg_color="#2b8a3e", state="disabled", command=self.save_reward_to_db)
         self.save_rew_btn.pack(side="right", padx=5)
-        self.confirm_all_btn = ctk.CTkButton(top_p, text="✅ Підтвердити всіх", fg_color="#2b8a3e", state="disabled", command=self.confirm_all_matches)
+        self.confirm_all_btn = ctk.CTkButton(top_p, text="✅ Підтвердити всіх", fg_color="#1864ab", state="disabled", command=self.confirm_all_matches)
         self.confirm_all_btn.pack(side="right", padx=5)
 
-        self.order_info_frame = ctk.CTkFrame(self.tab_rewards)
-        self.order_info_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        self.order_info_frame = ctk.CTkFrame(self.tab_rewards, fg_color="#e7f5ff", corner_radius=8)
+        self.order_info_frame.grid(row=1, column=0, padx=10, pady=(5, 10), sticky="ew")
         self.order_info_frame.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
-        self.lbl_ord_kind = ctk.CTkLabel(self.order_info_frame, text="Тип: —")
-        self.lbl_ord_kind.grid(row=0, column=0, padx=10, pady=8, sticky="w")
-        self.lbl_ord_num = ctk.CTkLabel(self.order_info_frame, text="Номер: —")
-        self.lbl_ord_num.grid(row=0, column=1, padx=10, pady=8, sticky="w")
-        self.lbl_ord_date = ctk.CTkLabel(self.order_info_frame, text="Дата: —")
-        self.lbl_ord_date.grid(row=0, column=2, padx=10, pady=8, sticky="w")
-        self.lbl_ord_level = ctk.CTkLabel(self.order_info_frame, text="Рівень: —")
-        self.lbl_ord_level.grid(row=0, column=3, padx=10, pady=8, sticky="w")
-        self.lbl_ord_pts = ctk.CTkLabel(self.order_info_frame, text="Бали: —")
-        self.lbl_ord_pts.grid(row=0, column=4, padx=10, pady=8, sticky="w")
+        self.lbl_ord_kind = ctk.CTkLabel(self.order_info_frame, text="Тип: —", font=("Segoe UI", 11))
+        self.lbl_ord_kind.grid(row=0, column=0, padx=12, pady=10, sticky="w")
+        self.lbl_ord_num = ctk.CTkLabel(self.order_info_frame, text="Номер: —", font=("Segoe UI", 11))
+        self.lbl_ord_num.grid(row=0, column=1, padx=12, pady=10, sticky="w")
+        self.lbl_ord_date = ctk.CTkLabel(self.order_info_frame, text="Дата: —", font=("Segoe UI", 11))
+        self.lbl_ord_date.grid(row=0, column=2, padx=12, pady=10, sticky="w")
+        self.lbl_ord_level = ctk.CTkLabel(self.order_info_frame, text="Рівень: —", font=("Segoe UI", 11))
+        self.lbl_ord_level.grid(row=0, column=3, padx=12, pady=10, sticky="w")
+        self.lbl_ord_pts = ctk.CTkLabel(self.order_info_frame, text="Бали: —", font=("Segoe UI", 11))
+        self.lbl_ord_pts.grid(row=0, column=4, padx=12, pady=10, sticky="w")
 
-        rew_frame = ctk.CTkFrame(self.tab_rewards)
-        rew_frame.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
+        # Студенти
+        student_section = ctk.CTkFrame(self.tab_rewards, fg_color="#f8f9fa", corner_radius=8)
+        student_section.grid(row=2, column=0, padx=10, pady=(10, 5), sticky="nsew")
+        student_section.grid_columnconfigure(0, weight=1)
+        student_section.grid_rowconfigure(1, weight=1)
+        
+        ctk.CTkLabel(student_section, text="Студенти", font=("Segoe UI", 13, "bold"), text_color="#1864ab").grid(row=0, column=0, padx=10, pady=(8, 4), sticky="w")
+        
+        rew_frame = ctk.CTkFrame(student_section, fg_color="transparent")
+        rew_frame.grid(row=1, column=0, padx=8, pady=(0, 8), sticky="nsew")
         rew_frame.grid_columnconfigure(0, weight=1)
         rew_frame.grid_rowconfigure(0, weight=1)
 
@@ -1397,7 +1446,33 @@ class StudentManagementApp(ctk.CTk):
         self.rew_tree.bind("<Double-1>", self.on_reward_row_double_click)
         self._treeviews.append(self.rew_tree)
 
-        ctk.CTkLabel(self.tab_rewards, text="Двічі клацніть статус, щоб обрати студента вручну, або «Видалити», щоб прибрати рядок. «Підтвердити всіх» приймає найімовірніший варіант — його потім можна змінити.", text_color="gray", wraplength=1200, justify="left").grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        # Викладачі
+        teacher_section = ctk.CTkFrame(self.tab_rewards, fg_color="#f8f9fa", corner_radius=8)
+        teacher_section.grid(row=3, column=0, padx=10, pady=(5, 10), sticky="nsew")
+        teacher_section.grid_columnconfigure(0, weight=1)
+        teacher_section.grid_rowconfigure(1, weight=1)
+        
+        ctk.CTkLabel(teacher_section, text="Викладачі", font=("Segoe UI", 13, "bold"), text_color="#1864ab").grid(row=0, column=0, padx=10, pady=(8, 4), sticky="w")
+        
+        teacher_frame = ctk.CTkFrame(teacher_section, fg_color="transparent")
+        teacher_frame.grid(row=1, column=0, padx=8, pady=(0, 8), sticky="nsew")
+        teacher_frame.grid_columnconfigure(0, weight=1)
+        teacher_frame.grid_rowconfigure(0, weight=1)
+
+        teacher_columns = ("t_num", "t_name", "t_status", "t_action")
+        self.teacher_rew_tree = ttk.Treeview(teacher_frame, columns=teacher_columns, show="headings", selectmode="browse", style="App.Treeview")
+        for col, text, w in [("t_num", "№", 40), ("t_name", "ПІБ Викладача з наказу", 300), ("t_status", "Статус", 340), ("t_action", "Дія", 90)]:
+            self.teacher_rew_tree.heading(col, text=text)
+            self.teacher_rew_tree.column(col, width=w, anchor="center" if col in ("t_num", "t_action") else "w")
+
+        teacher_scroll = ttk.Scrollbar(teacher_frame, orient="vertical", command=self.teacher_rew_tree.yview)
+        self.teacher_rew_tree.configure(yscrollcommand=teacher_scroll.set)
+        self.teacher_rew_tree.grid(row=0, column=0, sticky="nsew")
+        teacher_scroll.grid(row=0, column=1, sticky="ns")
+        self.teacher_rew_tree.bind("<Double-1>", self.on_teacher_reward_row_double_click)
+        self._treeviews.append(self.teacher_rew_tree)
+
+        ctk.CTkLabel(self.tab_rewards, text="Двічі клацніть статус, щоб обрати студента або викладача вручну, або «Видалити», щоб прибрати рядок. «Підтвердити всіх» приймає найімовірніший варіант — його потім можна змінити.", text_color="gray", wraplength=1200, justify="left").grid(row=4, column=0, padx=10, pady=5, sticky="w")
 
     def browse_reward_file(self):
         path = filedialog.askopenfilename(filetypes=[("Word Documents", "*.docx;*.doc"), ("All Files", "*.*")])
@@ -1413,6 +1488,7 @@ class StudentManagementApp(ctk.CTk):
                 reprimand_levels=self.app_config.get("reprimand_levels"),
             )
             db_students = self.db.get_all_students_flat()
+            db_teachers = self.db.get_all_teachers()
             threshold = self.app_config.get("match_threshold", 0.72)
             reward_data["source_path"] = path
 
@@ -1424,6 +1500,19 @@ class StudentManagementApp(ctk.CTk):
                 st["match_score"] = score
                 st["candidates"] = candidates
                 st["applied_points"] = applied_points(reward_data.get("order_kind"), reward_data["points"])
+            
+            # Якщо наказ є доганою - не обробляємо викладачів
+            if reward_data.get("order_kind") != "reprimand":
+                for teacher in reward_data.get("teachers", []):
+                    # Використовуємо той самий поріг, що і для студентів
+                    match, score, candidates = matching.find_best_teacher_match(teacher["full_name"], db_teachers, threshold)
+                    teacher["matched_id"] = match["id"] if match else None
+                    teacher["match_score"] = score
+                    teacher["candidates"] = candidates
+            else:
+                # Очищаємо список викладачів для доган
+                reward_data["teachers"] = []
+            
             return reward_data
 
         def on_success(reward_data):
@@ -1473,11 +1562,39 @@ class StudentManagementApp(ctk.CTk):
             pts = st.get("applied_points", self.loaded_reward_data["points"])
             tag = "odd" if idx % 2 == 0 else "even"
             self.rew_tree.insert("", "end", values=(idx, st["full_name"], st["group_name"], format_points(pts), status, "Видалити"), tags=(tag,))
+        
+        # Оновлюємо дерево викладачів
+        self._refresh_teacher_reward_tree()
 
-    def _recompute_applied_points(self):
-        data = self.loaded_reward_data
-        if not data:
+    def _refresh_teacher_reward_tree(self):
+        for row in self.teacher_rew_tree.get_children():
+            self.teacher_rew_tree.delete(row)
+        if not self.loaded_reward_data:
             return
+        teachers = self.loaded_reward_data.get("teachers", [])
+        for idx, teacher in enumerate(teachers, 1):
+            status = self._teacher_status_text_for(teacher)
+            tag = "odd" if idx % 2 == 0 else "even"
+            self.teacher_rew_tree.insert("", "end", values=(idx, teacher["full_name"], status, "Видалити"), tags=(tag,))
+
+    @staticmethod
+    def _teacher_status_text_for(teacher):
+        """Формує текст статусу для викладача аналогічно до студентів.
+        Формат: "Найімовірніший варіант з БД | Статус (%)" """
+        candidates = teacher.get("candidates") or []
+        if not candidates:
+            return "❌ Не знайдено жодного варіанта в базі"
+
+        if teacher.get("matched_id"):
+            confirmed = next((c for c in candidates if c["id"] == teacher["matched_id"]), None)
+            label = confirmed['full_name'] if confirmed else teacher["full_name"]
+            score = teacher.get("match_score", 0.0)
+            return f"{label} | ✅ Знайдено ({score:.0%})"
+
+        guess = candidates[0]
+        score = teacher.get("match_score", 0.0)
+        return f"{guess['full_name']} | ⚠ Потрібне підтвердження ({score:.0%})"
+
     def _recompute_applied_points(self):
         data = self.loaded_reward_data
         if not data:
@@ -1490,18 +1607,33 @@ class StudentManagementApp(ctk.CTk):
         Кожен рядок і надалі можна змінити вручну через подвійний клік."""
         if not self.loaded_reward_data:
             return
-        confirmed_count = 0
+        confirmed_students = 0
         for st in self.loaded_reward_data["students"]:
             if not st.get("matched_id") and st.get("candidates"):
                 best_guess = st["candidates"][0]
                 st["matched_id"] = best_guess["id"]
                 st["matched_group_id"] = best_guess["group_id"]
                 st["group_name"] = best_guess["group_name"]
-                confirmed_count += 1
+                confirmed_students += 1
+        
+        confirmed_teachers = 0
+        for teacher in self.loaded_reward_data.get("teachers", []):
+            if not teacher.get("matched_id") and teacher.get("candidates"):
+                best_guess = teacher["candidates"][0]
+                teacher["matched_id"] = best_guess["id"]
+                confirmed_teachers += 1
+        
         self._recompute_applied_points()
         self._refresh_reward_tree()
-        if confirmed_count:
-            messagebox.showinfo("Підтверджено", f"Прийнято найімовірніший варіант для {confirmed_count} студент(ів). Перевірте таблицю і за потреби виправте вручну.")
+        
+        message_parts = []
+        if confirmed_students:
+            message_parts.append(f"{confirmed_students} студент(ів)")
+        if confirmed_teachers:
+            message_parts.append(f"{confirmed_teachers} викладач(ів)")
+        
+        if message_parts:
+            messagebox.showinfo("Підтверджено", f"Прийнято найімовірніший варіант для {', '.join(message_parts)}. Перевірте таблицю і за потреби виправте вручну.")
         else:
             messagebox.showinfo("Немає що підтверджувати", "Усі рядки вже підтверджено або не мають жодного варіанта.")
 
@@ -1532,6 +1664,35 @@ class StudentManagementApp(ctk.CTk):
                 self._refresh_reward_tree()
 
             MatchResolutionDialog(self, st["full_name"], candidates, resolved)
+
+    def on_teacher_reward_row_double_click(self, event):
+        selected_item = self.teacher_rew_tree.selection()
+        if not selected_item or not self.loaded_reward_data:
+            return
+        values = self.teacher_rew_tree.item(selected_item)["values"]
+        row_idx = int(values[0]) - 1
+        column = self.teacher_rew_tree.identify_column(event.x)
+
+        if column == "#4":  # Дія / Видалити
+            teachers = self.loaded_reward_data.get("teachers", [])
+            if 0 <= row_idx < len(teachers):
+                teachers.pop(row_idx)
+            self._refresh_teacher_reward_tree()
+            return
+
+        if column == "#3":  # Статус / ручне підтвердження
+            teachers = self.loaded_reward_data.get("teachers", [])
+            if 0 <= row_idx < len(teachers):
+                teacher = teachers[row_idx]
+                candidates = teacher.get("candidates") or []
+
+                def resolved(chosen):
+                    if chosen:
+                        teacher["matched_id"] = chosen["id"]
+                        teacher["match_score"] = 1.0
+                    self._refresh_teacher_reward_tree()
+
+                TeacherMatchResolutionDialog(self, teacher["full_name"], candidates, resolved)
 
     def save_reward_to_db(self):
         if not self.loaded_reward_data or not self.loaded_reward_data["students"] and not self.loaded_reward_data.get("teachers") or not self.require_writable():
@@ -1567,9 +1728,10 @@ class StudentManagementApp(ctk.CTk):
                     count += 1
             teacher_count = 0
             for teacher in data.get("teachers", []):
-                teacher_id = self.db.upsert_teacher(teacher["full_name"])
-                self.db.add_teacher_reward(teacher_id, order_id)
-                teacher_count += 1
+                if teacher.get("matched_id"):
+                    self.db.add_teacher_reward(teacher["matched_id"], order_id)
+                    teacher_count += 1
+                # Якщо викладач не знайдений в базі - пропускаємо (не створюємо нового)
             return count, teacher_count
 
         def on_success(result):
@@ -1602,10 +1764,10 @@ class StudentManagementApp(ctk.CTk):
         rt_frame.grid_columnconfigure(0, weight=1)
         rt_frame.grid_rowconfigure(0, weight=1)
 
-        columns = ("num", "name", "position", "count", "orders")
+        columns = ("num", "name", "count", "orders")
         self.teacher_rewards_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
         for col, text, w in [
-            ("num", "№", 40), ("name", "ПІБ викладача", 260), ("position", "Посада", 200),
+            ("num", "№", 40), ("name", "ПІБ викладача", 360),
             ("count", "Кількість подяк", 100), ("orders", "Накази", 420),
         ]:
             self.teacher_rewards_tree.heading(col, text=text)
@@ -1637,7 +1799,7 @@ class StudentManagementApp(ctk.CTk):
                 summary = "; ".join(f"№{item['order_number']} від {item['order_date']}" for item in teacher_details) or "—"
                 self.teacher_rewards_tree.insert(
                     "", "end", iid=str(r["teacher_id"]),
-                    values=(idx, r["full_name"], r["position"], r["reward_count"], summary),
+                    values=(idx, r["full_name"], r["reward_count"], summary),
                     tags=(tag,),
                 )
         except Exception:
@@ -1653,8 +1815,7 @@ class StudentManagementApp(ctk.CTk):
         TeacherHistoryDialog(
             self,
             teacher_name=values[1],
-            position=values[2],
-            reward_count=values[3],
+            reward_count=values[2],
             history=history,
             open_file_fn=self.open_order_attachment,
         )
