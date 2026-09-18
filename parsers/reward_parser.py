@@ -35,6 +35,12 @@ _NAME_GROUP = re.compile(
     r"\s*[–-]\s*група\s*([А-ЯІЇЄҐA-Z]{2,4}\s*[-–]\s*\d{2})",
     re.IGNORECASE,
 )
+# Патерн для розпізнавання імен у відмінковому відмінку (наприклад, "Івану БОЙЧУКУ")
+_NAME_CASED = re.compile(
+    r"([А-ЯІЇЄҐ][а-яіїєґ'’\-]+(?:у|ові|ю|а|я|ій|ію|єм|є|й|ів|ь)\s+" +
+    r"[А-ЯІЇЄҐ][а-яіїєґ'’\-]+(?:у|ові|ю|а|я|ій|ію|єм|є|й|ів|ь|ьій|ій|а|у|і|ю|и|ої|е|ої)(?:\s+" +
+    r"[А-ЯІЇЄҐ][а-яіїєґ'’\-]+(?:у|ові|ю|а|я|ій|ію|єм|є|й|ів|ь|ій|ій|а|у|і|ю|и|ої|е|ої)?)?"
+)
 _NAME_ONLY = re.compile(
     r"^([А-ЯІЇЄҐ][а-яіїєґ'’\-]+\s+[А-ЯІЇЄҐ][а-яіїєґ'’\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’\-]+)?)"
     r"(?:\s*[–-]\s*.+)?$"
@@ -62,14 +68,25 @@ def _normalize_name_from_case(name):
 
 
 def _determine_level(text_lower, points_levels):
-    for rule in points_levels:
-        keywords = rule.get("keywords") or []
-        if keywords and any(kw in text_lower for kw in keywords):
-            return rule["label"], rule["points"]
-    for rule in points_levels:
-        if not rule.get("keywords"):
-            return rule["label"], rule["points"]
-    return "Не визначено", 1
+    """Визначає рівень подяки на основі тексту секції."""
+    # Перевіряємо, чи є згадка про міжнародний/всеукраїнський рівень
+    has_international = any(kw in text_lower for kw in ["міжнародн", "міжнарод"])
+    has_national = any(kw in text_lower for kw in ["всеукраїнськ", "всеукраїн"])
+    
+    # Перевіряємо, чи є зайняті місця (1, 2, 3 або I, II, III)
+    has_place = any(kw in text_lower for kw in ["перше місце", "друге місце", "третє місце", 
+                                                   "1 місце", "2 місце", "3 місце",
+                                                   "i місце", "ii місце", "iii місце",
+                                                   "i-ше місце", "ii-ге місце", "iii-тє місце"])
+    
+    if has_international or has_national:
+        if has_place:
+            return "Міжнародний/Всеукраїнський (1-3 місце)", 2
+        else:
+            return "Міжнародний/Всеукраїнський (участь)", 1
+    else:
+        # Місцевий рівень - 0.5 балів
+        return "Місцевий", 0.5
 
 
 def _detect_order_kind(text_lower):
@@ -88,6 +105,51 @@ def _collect_lines(doc):
             if cells:
                 lines.append("    ".join(cells))
     return lines
+
+
+def _extract_sections_with_students(lines):
+    """Витягує секції (§1, §2, 1., 2., etc.) та студентів у кожній секції з їх контекстом."""
+    sections = []
+    current_section = None
+    current_context = ""
+    
+    for line in lines:
+        line_clean = line.strip()
+        
+        # Виявляємо початок нової секції (§1, §2 або 1., 2., etc.)
+        section_match = re.match(r"^§?(\d+)[\.\)]", line_clean)
+        if section_match:
+            # Зберігаємо попередню секцію
+            if current_section and current_section["students"]:
+                sections.append(current_section)
+            
+            # Починаємо нову секцію
+            section_num = section_match.group(1)
+            current_section = {
+                "section_num": section_num,
+                "context": line_clean,
+                "students": []
+            }
+            current_context = line_clean
+        elif current_section:
+            # Додаємо контекст до поточної секції
+            if line_clean and not re.match(r"^§?\d+[\.\)]", line_clean):
+                current_context += " " + line_clean
+                current_section["context"] = current_context
+            
+            # Шукаємо студентів у рядку
+            for m in _NAME_GROUP.findall(line_clean):
+                current_section["students"].append({
+                    "full_name": m[0],
+                    "group_name": re.sub(r"\s+", "", (m[1] or "").upper()),
+                    "section_context": current_context
+                })
+    
+    # Додаємо останню секцію
+    if current_section and current_section["students"]:
+        sections.append(current_section)
+    
+    return sections
 
 
 def parse_reward_order(file_path, points_levels=None, reprimand_levels=None):
@@ -109,8 +171,13 @@ def parse_reward_order(file_path, points_levels=None, reprimand_levels=None):
     text_lower = full_text.lower()
     order_kind = _detect_order_kind(text_lower)
     levels = reprimand_levels if order_kind == "reprimand" else points_levels
+    
+    # Визначаємо загальний рівень наказу
     level_type, points = _determine_level(text_lower, levels)
 
+    # Витягуємо секції з індивідуальними контекстами
+    sections = _extract_sections_with_students(lines)
+    
     students = []
     teachers = []
 
@@ -120,11 +187,25 @@ def parse_reward_order(file_path, points_levels=None, reprimand_levels=None):
             excluded.add(idx)
             excluded.add(idx + 1)
 
-    def add_student(name, grp):
+    def add_student(name, grp, commendation_type=None, commendation_points=None):
         name = name.strip()
         grp = re.sub(r"\s+", "", (grp or "").upper())
-        if not any(s["full_name"].lower() == name.lower() and s.get("group_name") == grp for s in students):
-            students.append({"full_name": name, "group_name": grp})
+        
+        # Перевіряємо, чи студент вже є в списку
+        existing = next((s for s in students if s["full_name"].lower() == name.lower() and s.get("group_name") == grp), None)
+        
+        if existing:
+            # Якщо студент вже є, додаємо новий тип подяки
+            if commendation_type and commendation_type not in existing.get("commendation_types", []):
+                existing.setdefault("commendation_types", []).append(commendation_type)
+                existing.setdefault("commendation_points", []).append(commendation_points or points)
+        else:
+            # Додаємо нового студента
+            student_data = {"full_name": name, "group_name": grp}
+            if commendation_type:
+                student_data["commendation_types"] = [commendation_type]
+                student_data["commendation_points"] = [commendation_points or points]
+            students.append(student_data)
 
     def add_teacher(name):
         name = name.strip()
@@ -138,52 +219,78 @@ def parse_reward_order(file_path, points_levels=None, reprimand_levels=None):
         if not any(t["full_name"].lower() == name.lower() for t in teachers):
             teachers.append({"full_name": name, "group_name": None})
 
-    for line_idx, line in enumerate(lines):
-        line_clean = line.strip()
-        if not line_clean or line_idx in excluded:
-            continue
-
-        # Спочатку розпізнаємо студентів з групами
-        for m in _NAME_GROUP.findall(line_clean):
-            add_student(m[0], m[1])
-
-        # Тепер розпізнаємо всі імена без групи як викладачів
-        # Спочатку розбиваємо рядок на колонки по табах і подвійних пробілах
-        cols = re.split(r"\t{1,}| {2,}", line_clean)
-        
-        for col in cols:
-            col = col.strip()
-            if not col:
+    # Обробляємо секції з індивідуальними рівнями
+    if sections and order_kind != "reprimand":
+        for section in sections:
+            section_context = section["context"].lower()
+            # Визначаємо рівень для цієї секції
+            section_level, section_points = _determine_level(section_context, levels)
+            
+            for student in section["students"]:
+                add_student(
+                    student["full_name"], 
+                    student["group_name"],
+                    commendation_type=section_level,
+                    commendation_points=section_points
+                )
+    else:
+        # Якщо немає секцій або це догана - використовуємо розширений метод для студентів
+        for line_idx, line in enumerate(lines):
+            line_clean = line.strip()
+            if not line_clean or line_idx in excluded:
                 continue
+
+            # Спочатку розпізнаємо студентів з групами
+            for m in _NAME_GROUP.findall(line_clean):
+                add_student(m[0], m[1])
             
-            # Якщо є група в колонці - це вже оброблено як студент
-            if "група" in col.lower():
+            # Додатково шукаємо імена без групи, але які можуть бути студентами
+            # Розбиваємо рядок на колонки
+            cols = re.split(r"\t{1,}| {2,}", line_clean)
+            for col in cols:
+                col = col.strip()
+                if not col or "група" in col.lower():
+                    continue
+                
+                # Шукаємо імена в колонці (більш гнучкий патерн)
+                names_in_col = re.findall(r"[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+\s+[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+(?:\s+[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+)?", col)
+                for name in names_in_col:
+                    name = name.strip()
+                    # Якщо ім'я вже є в студентах - пропускаємо
+                    if any(s["full_name"].lower() == name.lower() for s in students):
+                        continue
+                    # Додаємо як студента без групи
+                    add_student(name, "Невідомо")
+
+    # Обробляємо викладачів окремо для всіх рядків (тільки для подяк, не для доган)
+    if order_kind != "reprimand":
+        for line_idx, line in enumerate(lines):
+            line_clean = line.strip()
+            if not line_clean or line_idx in excluded:
                 continue
+
+            # Розбиваємо рядок на колонки по табах і подвійних пробілах
+            cols = re.split(r"\t{1,}| {2,}", line_clean)
             
-            # Шукаємо імена в колонці з більш гнучким патерном
-            # Підтримує як "Прізвище Ім'я" так і "Ім'я Прізвище", включаючи відмінкові форми
-            names_in_col = re.findall(r"[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+\s+[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+(?:\s+[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+)?", col)
-            
-            for name in names_in_col:
-                name = name.strip()
-                # Якщо ім'я вже є в студентах - пропускаємо
-                if any(s["full_name"].lower() == name.lower() for s in students):
+            for col in cols:
+                col = col.strip()
+                if not col:
                     continue
-                # Додаємо як викладача
-                add_teacher(name)
-        
-        # Шукаємо викладачів з явними позначками
-        if any(hint in line_clean.lower() for hint in TEACHER_HINTS):
-            for m in _TEACHER_NAME.findall(line_clean):
-                name = m.strip()
-                # Ігноруємо службові слова
-                if any(w in line_clean.lower() for w in ROLE_KEYWORDS):
+                
+                # Якщо є група в колонці - це вже оброблено як студент
+                if "група" in col.lower():
                     continue
-                # Якщо ім'я вже є в студентах - пропускаємо
-                if any(s["full_name"].lower() == name.lower() for s in students):
-                    continue
-                # Додаємо як викладача
-                add_teacher(name)
+                
+                # Шукаємо імена в колонці з більш гнучким патерном
+                names_in_col = re.findall(r"[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+\s+[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+(?:\s+[А-ЯІЇЄҐA-Z][А-ЯІЇЄҐа-яіїєґA-Za-z'’\-]+)?", col)
+                
+                for name in names_in_col:
+                    name = name.strip()
+                    # Якщо ім'я вже є в студентах - пропускаємо
+                    if any(s["full_name"].lower() == name.lower() for s in students):
+                        continue
+                    # Додаємо як викладача
+                    add_teacher(name)
 
     return {
         "order_number": order_number,

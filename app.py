@@ -363,14 +363,14 @@ class StudentHistoryDialog(ctk.CTkToplevel):
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
 
-        columns = ("date", "number", "level", "pts", "file")
+        columns = ("date", "number", "level", "commendation_type", "pts", "file")
         self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
         for col, text, w in [
             ("date", "Дата", 120), ("number", "№ наказу", 130),
-            ("level", "Рівень", 180), ("pts", "Бали", 80), ("file", "Файл", 200),
+            ("level", "Рівень", 140), ("commendation_type", "Тип подяки", 250), ("pts", "Бали", 80), ("file", "Файл", 200),
         ]:
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, anchor="w" if col == "file" else "center")
+            self.tree.column(col, width=w, anchor="w" if col in ("file", "commendation_type") else "center")
         scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -378,17 +378,26 @@ class StudentHistoryDialog(ctk.CTkToplevel):
         self.tree.bind("<Double-1>", lambda _e: self._open_selected())
 
         if not history:
-            self.tree.insert("", "end", values=("", "Немає подяк і доган", "", "", ""))
+            self.tree.insert("", "end", values=("", "Немає подяк і доган", "", "", "", "", ""))
         else:
             for item in history:
                 pts = format_points(item["points"])
                 if float(item["points"]) > 0:
                     pts = f"+{pts}"
                 filename = item.get("source_filename") or ("є файл" if item.get("has_file") else "—")
+                commendation_type = item.get("commendation_type") or item.get("level_type") or "—"
+                
+                # Якщо є детальна інформація про типи, показуємо просто "змішані"
+                if "commendation_types" in item and len(item["commendation_types"]) > 1:
+                    commendation_display = "змішані"
+                else:
+                    commendation_display = commendation_type
+                
                 self.tree.insert("", "end", iid=str(item["order_id"]), values=(
                     item.get("order_date") or "",
                     item.get("order_number") or "",
                     item.get("level_type") or "",
+                    commendation_display,
                     pts,
                     filename,
                 ))
@@ -1593,10 +1602,11 @@ class StudentManagementApp(ctk.CTk):
         rew_frame.grid_columnconfigure(0, weight=1)
         rew_frame.grid_rowconfigure(0, weight=1)
 
-        columns = ("num", "name", "grp", "pts", "status", "action")
+        columns = ("num", "name", "grp", "commendation_type", "pts", "status", "action")
         self.rew_tree = ttk.Treeview(rew_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
         for col, text, w in [("num", "№", 40), ("name", "ПІБ Студента з наказу", 220), ("grp", "Група", 80),
-                              ("pts", "Бали", 55), ("status", "Найімовірніший варіант | Статус", 340), ("action", "Дія", 90)]:
+                              ("commendation_type", "Тип подяки", 120), ("pts", "Бали", 55), 
+                              ("status", "Найімовірніший варіант | Статус", 280), ("action", "Дія", 90)]:
             self.rew_tree.heading(col, text=text)
             self.rew_tree.column(col, width=w, anchor="center" if col in ("num", "pts", "action") else "w")
 
@@ -1681,11 +1691,33 @@ class StudentManagementApp(ctk.CTk):
             self.lbl_rew_status.configure(text=f"Файл: {os.path.basename(path)}")
             kind_label = "Догана" if reward_data.get("order_kind") == "reprimand" else "Подяка"
             pts_prefix = "−" if reward_data.get("order_kind") == "reprimand" else "+"
+            
+            # Визначаємо, чи є змішані типи подяок
+            commendation_types = set()
+            for st in reward_data["students"]:
+                if "commendation_types" in st:
+                    commendation_types.update(st["commendation_types"])
+            
+            if len(commendation_types) > 1:
+                level_display = "змішаний"
+                # Показуємо тільки одне значення балів (максимальне)
+                all_points = []
+                for st in reward_data["students"]:
+                    if "commendation_points" in st:
+                        all_points.extend(st["commendation_points"])
+                if all_points:
+                    pts_display = f"{pts_prefix}{format_points(max(all_points))}"
+                else:
+                    pts_display = f"{pts_prefix}{format_points(reward_data['points'])}"
+            else:
+                level_display = reward_data.get("level_type", "—")
+                pts_display = f"{pts_prefix}{format_points(reward_data['points'])}"
+            
             self.lbl_ord_kind.configure(text=f"Тип: {kind_label}")
             self.lbl_ord_num.configure(text=f"Номер: {reward_data['order_number']}")
             self.lbl_ord_date.configure(text=f"Дата: {reward_data['order_date']}")
-            self.lbl_ord_level.configure(text=f"Рівень: {reward_data['level_type']}")
-            self.lbl_ord_pts.configure(text=f"Бали: {pts_prefix}{format_points(reward_data['points'])}")
+            self.lbl_ord_level.configure(text=f"Рівень: {level_display}")
+            self.lbl_ord_pts.configure(text=f"Бали: {pts_display}")
             self._refresh_reward_tree()
             self.save_rew_btn.configure(state="normal")
             self.confirm_all_btn.configure(state="normal")
@@ -1718,11 +1750,44 @@ class StudentManagementApp(ctk.CTk):
             self.rew_tree.delete(row)
         if not self.loaded_reward_data:
             return
+        
+        is_reprimand = self.loaded_reward_data.get("order_kind") == "reprimand"
+        
+        # Якщо це догана, приховуємо колонку "Тип подяки"
+        if is_reprimand:
+            self.rew_tree.configure(columns=("num", "name", "grp", "pts", "status", "action"))
+            self.rew_tree.heading("commendation_type", text="")
+            self.rew_tree.column("commendation_type", width=0, stretch=False)
+        else:
+            self.rew_tree.configure(columns=("num", "name", "grp", "commendation_type", "pts", "status", "action"))
+            self.rew_tree.heading("commendation_type", text="Тип подяки")
+            self.rew_tree.column("commendation_type", width=120, anchor="center")
+        
         for idx, st in enumerate(self.loaded_reward_data["students"], 1):
             status = self._status_text_for(st)
-            pts = st.get("applied_points", self.loaded_reward_data["points"])
-            tag = "odd" if idx % 2 == 0 else "even"
-            self.rew_tree.insert("", "end", values=(idx, st["full_name"], st["group_name"], format_points(pts), status, "Видалити"), tags=(tag,))
+            
+            if is_reprimand:
+                # Для доган не показуємо тип подяки
+                pts = st.get("applied_points", self.loaded_reward_data["points"])
+                tag = "odd" if idx % 2 == 0 else "even"
+                self.rew_tree.insert("", "end", values=(idx, st["full_name"], st["group_name"], format_points(pts), status, "Видалити"), tags=(tag,))
+            else:
+                # Визначаємо тип подяки та бали
+                commendation_types = st.get("commendation_types", [])
+                commendation_points = st.get("commendation_points", [])
+                
+                if len(commendation_types) > 1:
+                    commendation_display = "змішані"
+                    pts = sum(commendation_points) if commendation_points else st.get("applied_points", self.loaded_reward_data["points"])
+                elif len(commendation_types) == 1:
+                    commendation_display = commendation_types[0]
+                    pts = commendation_points[0] if commendation_points else st.get("applied_points", self.loaded_reward_data["points"])
+                else:
+                    commendation_display = self.loaded_reward_data.get("level_type", "—")
+                    pts = st.get("applied_points", self.loaded_reward_data["points"])
+                
+                tag = "odd" if idx % 2 == 0 else "even"
+                self.rew_tree.insert("", "end", values=(idx, st["full_name"], st["group_name"], commendation_display, format_points(pts), status, "Видалити"), tags=(tag,))
         
         # Оновлюємо дерево викладачів
         self._refresh_teacher_reward_tree()
@@ -1761,7 +1826,12 @@ class StudentManagementApp(ctk.CTk):
         if not data:
             return
         for st in data["students"]:
-            st["applied_points"] = applied_points(data.get("order_kind"), data["points"])
+            # Якщо є індивідуальні типи подяок з різними балами - сумуємо їх
+            commendation_points = st.get("commendation_points", [])
+            if commendation_points:
+                st["applied_points"] = sum(commendation_points)
+            else:
+                st["applied_points"] = applied_points(data.get("order_kind"), data["points"])
 
     def confirm_all_matches(self):
         """Приймає найімовірніший варіант для всіх ще непідтверджених рядків.
@@ -1805,13 +1875,24 @@ class StudentManagementApp(ctk.CTk):
         values = self.rew_tree.item(selected_item)["values"]
         row_idx = int(values[0]) - 1
         column = self.rew_tree.identify_column(event.x)
+        
+        is_reprimand = self.loaded_reward_data.get("order_kind") == "reprimand"
+        
+        if is_reprimand:
+            # Для доган: колонки без "Тип подяки"
+            action_col = "#6"
+            status_col = "#5"
+        else:
+            # Для подяок: колонки з "Тип подяки"
+            action_col = "#7"
+            status_col = "#6"
 
-        if column == "#6":  # Дія / Видалити
+        if column == action_col:  # Дія / Видалити
             self.loaded_reward_data["students"].pop(row_idx)
             self._refresh_reward_tree()
             return
 
-        if column == "#5":  # Статус / ручне підтвердження
+        if column == status_col:  # Статус / ручне підтвердження
             st = self.loaded_reward_data["students"][row_idx]
             candidates = st.get("candidates") or []
 
@@ -1876,17 +1957,62 @@ class StudentManagementApp(ctk.CTk):
             if source_path and os.path.isfile(source_path):
                 with open(source_path, "rb") as fh:
                     source_bytes = fh.read()
+            
+            # Визначаємо рівень та бали для наказу
+            commendation_types = set()
+            for st in data["students"]:
+                if "commendation_types" in st:
+                    commendation_types.update(st["commendation_types"])
+            
+            if len(commendation_types) > 1:
+                order_level = "змішаний"
+                # Визначаємо діапазон балів
+                all_points = []
+                for st in data["students"]:
+                    if "commendation_points" in st:
+                        all_points.extend(st["commendation_points"])
+                if all_points:
+                    order_points = max(all_points)  # Зберігаємо максимальне значення
+                else:
+                    order_points = data["points"]
+            else:
+                order_level = data.get("level_type", "—")
+                order_points = data["points"]
+            
             order_id = self.db.upsert_order(
                 data["order_number"], data["order_date"], "—",
-                data["level_type"], data["points"],
+                order_level, order_points,
                 source_filename=source_name, source_file=source_bytes,
             )
+            
+            # Перевіряємо, чи існують вже записи для цього наказу
+            # Якщо існують - це перезавантаження, видаляємо старі записи
+            if self.db.has_achievements_for_order(order_id):
+                self.db.delete_achievements_for_order(order_id)
+            
             count = 0
             for st in data["students"]:
                 if st.get("matched_id"):
-                    pts = applied_points(data.get("order_kind"), data["points"])
-                    self.db.add_achievement(st["matched_id"], order_id, pts)
-                    count += 1
+                    # Обробляємо індивідуальні типи подяок
+                    commendation_types = st.get("commendation_types", [])
+                    commendation_points = st.get("commendation_points", [])
+                    
+                    if len(commendation_types) > 1:
+                        # Якщо кілька типів - додаємо окремі записи для кожного типу
+                        for comm_type, comm_pts in zip(commendation_types, commendation_points):
+                            pts = comm_pts if comm_pts else applied_points(data.get("order_kind"), data["points"])
+                            self.db.add_achievement(st["matched_id"], order_id, pts, comm_type)
+                            count += 1
+                    elif len(commendation_types) == 1:
+                        # Один тип - зберігаємо з конкретним типом
+                        pts = commendation_points[0] if commendation_points else applied_points(data.get("order_kind"), data["points"])
+                        self.db.add_achievement(st["matched_id"], order_id, pts, commendation_types[0])
+                        count += 1
+                    else:
+                        # Без типу - використовуємо загальний рівень наказу
+                        pts = applied_points(data.get("order_kind"), data["points"])
+                        self.db.add_achievement(st["matched_id"], order_id, pts, data.get("level_type"))
+                        count += 1
             teacher_count = 0
             for teacher in data.get("teachers", []):
                 if teacher.get("matched_id"):
@@ -2051,10 +2177,21 @@ class StudentManagementApp(ctk.CTk):
                 self.rating_tree.delete(row)
             for idx, r in enumerate(rows, 1):
                 tag = "odd" if idx % 2 == 0 else "even"
-                summary = "; ".join(format_achievement_line(item) for item in by_id.get(r["student_id"], [])) or "—"
+                
+                # Формуємо опис наказів з урахуванням змішаних типів
+                summaries = []
+                for item in by_id.get(r["student_id"], []):
+                    if "commendation_types" in item and len(item["commendation_types"]) > 1:
+                        # Для змішаних типів показуємо просто "змішані"
+                        summary = f"№{item['order_number']} від {item['order_date']} (змішані, {format_points(item['points'])})"
+                    else:
+                        summary = format_achievement_line(item)
+                    summaries.append(summary)
+                
+                summary_text = "; ".join(summaries) if summaries else "—"
                 self.rating_tree.insert(
                     "", "end", iid=str(r["student_id"]),
-                    values=(idx, r["full_name"], r["group_name"], format_points(r["total"]), summary),
+                    values=(idx, r["full_name"], r["group_name"], format_points(r["total"]), summary_text),
                     tags=(tag,),
                 )
         except Exception:

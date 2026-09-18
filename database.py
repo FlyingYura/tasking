@@ -36,7 +36,7 @@ ALLOWED_TABLES = {
     "groups": ["name", "study_year", "curator"],
     "students": ["full_name", "funding", "note"],
     "orders": ["order_number", "order_date", "level_type", "default_points"],
-    "achievements": ["points_awarded"],
+    "achievements": ["points_awarded", "commendation_type"],
     "teachers": ["full_name"],
     "teacher_rewards": [],
 }
@@ -120,7 +120,7 @@ class Database:
                     student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
                     order_id INT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
                     points_awarded NUMERIC(8,2) NOT NULL,
-                    UNIQUE(student_id, order_id)
+                    commendation_type TEXT
                 );
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_students_group ON students(group_id);")
@@ -147,6 +147,24 @@ class Database:
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_teacher_rewards_teacher ON teacher_rewards(teacher_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_teacher_rewards_order ON teacher_rewards(order_id);")
+            # Міграція для додавання поля commendation_type
+            cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS commendation_type TEXT;")
+            # Міграція для видалення UNIQUE обмеження (якщо існує)
+            try:
+                cur.execute("""
+                    ALTER TABLE achievements 
+                    DROP CONSTRAINT IF EXISTS achievements_student_id_order_id_key;
+                """)
+            except Exception:
+                pass  # Обмеження може не існувати або мати іншу назву
+            # Міграція для видалення UNIQUE обмеження (якщо існує)
+            try:
+                cur.execute("""
+                    ALTER TABLE achievements 
+                    DROP CONSTRAINT IF EXISTS achievements_student_id_order_id_key;
+                """)
+            except Exception:
+                pass  # Обмеження може не існувати або мати іншу назву
 
     # -- групи / студенти ---------------------------------------------------
     def upsert_group(self, name, study_year, curator):
@@ -216,13 +234,23 @@ class Database:
             """, (order_number, order_date, event_title, level_type, points, source_filename, file_param))
             return cur.fetchone()[0]
 
-    def add_achievement(self, student_id, order_id, points):
+    def add_achievement(self, student_id, order_id, points, commendation_type=None):
         with self.cursor() as cur:
             cur.execute("""
-                INSERT INTO achievements (student_id, order_id, points_awarded)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (student_id, order_id) DO UPDATE SET points_awarded = EXCLUDED.points_awarded;
-            """, (student_id, order_id, points))
+                INSERT INTO achievements (student_id, order_id, points_awarded, commendation_type)
+                VALUES (%s, %s, %s, %s);
+            """, (student_id, order_id, points, commendation_type))
+    
+    def delete_achievements_for_order(self, order_id):
+        """Видаляє всі нарахування для конкретного наказу."""
+        with self.cursor() as cur:
+            cur.execute("DELETE FROM achievements WHERE order_id = %s;", (order_id,))
+    
+    def has_achievements_for_order(self, order_id):
+        """Перевіряє, чи є нарахування для конкретного наказу."""
+        with self.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM achievements WHERE order_id = %s;", (order_id,))
+            return cur.fetchone()[0] > 0
 
     def get_rating(self, group_id=None):
         """Один запит з JOIN + GROUP BY. Підсумок не опускається нижче 0,
@@ -246,10 +274,12 @@ class Database:
                     GROUP BY s.id, s.full_name, g.name
                     ORDER BY total DESC, s.full_name ASC;
                 """)
-            return [
+            # Включаємо всіх студентів, навіть з 0 балів
+            result = [
                 {"student_id": r[0], "full_name": r[1], "group_name": r[2], "total": float(r[3] or 0)}
                 for r in cur.fetchall()
             ]
+            return result
 
     def get_student_totals(self):
         """Поточний рейтинг кожного студента: {student_id: total}."""
@@ -265,25 +295,63 @@ class Database:
         with self.cursor() as cur:
             cur.execute("""
                 SELECT o.id, o.order_number, o.order_date, o.event_title, o.level_type,
-                       a.points_awarded, o.source_filename, (o.source_file IS NOT NULL)
+                       a.points_awarded, o.source_filename, (o.source_file IS NOT NULL), a.commendation_type
                 FROM achievements a
                 JOIN orders o ON o.id = a.order_id
                 WHERE a.student_id = %s
                 ORDER BY o.order_date DESC, o.id DESC;
             """, (student_id,))
-            return [
-                {
-                    "order_id": r[0],
-                    "order_number": r[1],
-                    "order_date": r[2],
-                    "event_title": r[3],
-                    "level_type": r[4],
-                    "points": float(r[5] or 0),
-                    "source_filename": r[6],
-                    "has_file": bool(r[7]),
-                }
-                for r in cur.fetchall()
-            ]
+            
+            # Групуємо результати по наказах
+            grouped = {}
+            for r in cur.fetchall():
+                order_id = r[0]
+                if order_id not in grouped:
+                    grouped[order_id] = {
+                        "order_id": order_id,
+                        "order_number": r[1],
+                        "order_date": r[2],
+                        "event_title": r[3],
+                        "level_type": r[4],
+                        "total_points": 0,
+                        "source_filename": r[6],
+                        "has_file": bool(r[7]),
+                        "commendation_types": [],
+                        "commendation_points": []
+                    }
+                
+                grouped[order_id]["total_points"] += float(r[5] or 0)
+                if r[8]:  # commendation_type
+                    if r[8] not in grouped[order_id]["commendation_types"]:
+                        grouped[order_id]["commendation_types"].append(r[8])
+                        grouped[order_id]["commendation_points"].append(float(r[5] or 0))
+            
+            # Формуємо результат
+            result = []
+            for order_id, data in grouped.items():
+                # Визначаємо тип подяки для відображення
+                if len(data["commendation_types"]) > 1:
+                    commendation_display = "змішаний"
+                elif len(data["commendation_types"]) == 1:
+                    commendation_display = data["commendation_types"][0]
+                else:
+                    commendation_display = data["level_type"]
+                
+                result.append({
+                    "order_id": data["order_id"],
+                    "order_number": data["order_number"],
+                    "order_date": data["order_date"],
+                    "event_title": data["event_title"],
+                    "level_type": data["level_type"],
+                    "points": data["total_points"],
+                    "source_filename": data["source_filename"],
+                    "has_file": data["has_file"],
+                    "commendation_type": commendation_display,
+                    "commendation_types": data["commendation_types"],
+                    "commendation_points": data["commendation_points"]
+                })
+            
+            return result
 
     def get_achievement_details(self):
         """Усі нарахування з реквізитами наказу — для Excel-експорту."""
@@ -291,27 +359,66 @@ class Database:
             cur.execute("""
                 SELECT s.id, s.full_name, g.name,
                        o.order_number, o.order_date, o.event_title, o.level_type,
-                       a.points_awarded, o.source_filename
+                       a.points_awarded, o.source_filename, a.commendation_type
                 FROM achievements a
                 JOIN students s ON s.id = a.student_id
                 JOIN groups g ON g.id = s.group_id
                 JOIN orders o ON o.id = a.order_id
                 ORDER BY s.full_name, o.order_date, o.id;
             """)
-            return [
-                {
-                    "student_id": r[0],
-                    "full_name": r[1],
-                    "group_name": r[2],
-                    "order_number": r[3],
-                    "order_date": r[4],
-                    "event_title": r[5],
-                    "level_type": r[6],
-                    "points": float(r[7] or 0),
-                    "source_filename": r[8],
-                }
-                for r in cur.fetchall()
-            ]
+            
+            # Групуємо результати по студентам і наказах
+            grouped = {}
+            for r in cur.fetchall():
+                key = (r[0], r[3])  # student_id, order_number
+                if key not in grouped:
+                    grouped[key] = {
+                        "student_id": r[0],
+                        "full_name": r[1],
+                        "group_name": r[2],
+                        "order_number": r[3],
+                        "order_date": r[4],
+                        "event_title": r[5],
+                        "level_type": r[6],
+                        "total_points": 0,
+                        "source_filename": r[8],
+                        "commendation_types": [],
+                        "commendation_points": []
+                    }
+                
+                grouped[key]["total_points"] += float(r[7] or 0)
+                if r[9]:  # commendation_type
+                    if r[9] not in grouped[key]["commendation_types"]:
+                        grouped[key]["commendation_types"].append(r[9])
+                        grouped[key]["commendation_points"].append(float(r[7] or 0))
+            
+            # Формуємо результат
+            result = []
+            for key, data in grouped.items():
+                # Визначаємо тип подяки для відображення
+                if len(data["commendation_types"]) > 1:
+                    commendation_display = "змішаний"
+                elif len(data["commendation_types"]) == 1:
+                    commendation_display = data["commendation_types"][0]
+                else:
+                    commendation_display = data["level_type"]
+                
+                result.append({
+                    "student_id": data["student_id"],
+                    "full_name": data["full_name"],
+                    "group_name": data["group_name"],
+                    "order_number": data["order_number"],
+                    "order_date": data["order_date"],
+                    "event_title": data["event_title"],
+                    "level_type": data["level_type"],
+                    "points": data["total_points"],
+                    "source_filename": data["source_filename"],
+                    "commendation_type": commendation_display,
+                    "commendation_types": data["commendation_types"],
+                    "commendation_points": data["commendation_points"]
+                })
+            
+            return result
 
     # -- викладачі / подяки викладачів ----------------------------------------
     def upsert_teacher(self, full_name):

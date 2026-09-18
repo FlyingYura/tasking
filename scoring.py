@@ -43,4 +43,9 @@ def format_achievement_line(item):
     if pts > 0:
         pts_text = f"+{pts_text}"
     date_part = f" від {date}" if date and date != "Не вказана" else ""
+    
+    # Якщо є змішані типи, показуємо просто "змішані"
+    if "commendation_types" in item and len(item["commendation_types"]) > 1:
+        return f"№{number}{date_part} (змішані, {pts_text})"
+    
     return f"№{number}{date_part} ({pts_text})"
