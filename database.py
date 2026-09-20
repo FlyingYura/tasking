@@ -7,6 +7,8 @@ from contextlib import contextmanager
 import psycopg2
 from psycopg2 import Binary
 
+from scoring import format_points
+
 logger = logging.getLogger("app.database")
 
 
@@ -526,8 +528,9 @@ class Database:
                 else:
                     cur.execute(sql + " ORDER BY g.name, s.full_name;")
             elif table_name == "orders":
-                cur.execute("""
-                    SELECT id, order_number, order_date, level_type, default_points,
+                cur.execute(r"""
+                    SELECT id, order_number, order_date, level_type,
+                           COALESCE(points_display, regexp_replace(default_points::text, '\.?0+$', '')) AS default_points,
                            COALESCE(source_filename, '—') AS source_filename
                     FROM orders
                     ORDER BY id;
@@ -957,7 +960,11 @@ class SnapshotDatabase:
         elif table_name == "orders":
             columns = ["id", "order_number", "order_date", "level_type", "default_points", "source_filename"]
             rows = [
-                (o["id"], o["order_number"], o["order_date"], o["level_type"], o.get("default_points"), o.get("source_filename") or "—")
+                (
+                    o["id"], o["order_number"], o["order_date"], o["level_type"],
+                    o.get("points_display") or format_points(o.get("default_points") or 0),
+                    o.get("source_filename") or "—",
+                )
                 for o in self.orders
             ]
         elif table_name == "teachers":

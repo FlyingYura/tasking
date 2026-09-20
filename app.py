@@ -369,7 +369,7 @@ class StudentHistoryDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             self,
-            text=f"{student_name}  ·  група {group_name}  ·  у рейтингу: {format_points(total_points)}",
+            text=f"{student_name}  |  група {group_name}  |  у рейтингу: {format_points(total_points)} балів",
             font=("Segoe UI", 14, "bold"),
             justify="left",
         ).pack(padx=16, pady=(16, 8), anchor="w")
@@ -448,7 +448,7 @@ class TeacherHistoryDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             self,
-            text=f"{teacher_name}  ·  кількість подяк: {reward_count}",
+            text=f"{teacher_name}  |  кількість подяк: {reward_count}",
             font=("Segoe UI", 14, "bold"),
             justify="left",
         ).pack(padx=16, pady=(16, 8), anchor="w")
@@ -507,7 +507,7 @@ class StudentManagementApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("ДМТФК+ — документообіг")
+        self.title("ДМТФК+")
         self.minsize(1100, 800)
 
 
