@@ -120,6 +120,12 @@ def _get_ui_scale(root):
         return 1.0
 
 
+def setup_tree_columns(tree, columns_spec, center_cols=()):
+    for col, text, w in columns_spec:
+        tree.heading(col, text=text)
+        tree.column(col, width=w, anchor="center" if col in center_cols else "w")
+
+
 def run_async(widget, work_fn, on_success=None, on_error=None):
 
     def target():
@@ -375,12 +381,10 @@ class StudentHistoryDialog(ctk.CTkToplevel):
 
         columns = ("date", "number", "level", "commendation_type", "pts", "file")
         self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [
+        setup_tree_columns(self.tree, [
             ("date", "Дата", 120), ("number", "№ наказу", 130),
             ("level", "Рівень", 140), ("commendation_type", "Тип", 250), ("pts", "Бали", 80), ("file", "Файл", 200),
-        ]:
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, anchor="w" if col in ("file", "commendation_type") else "center")
+        ], center_cols=("date", "number", "level", "pts"))
         scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -456,12 +460,10 @@ class TeacherHistoryDialog(ctk.CTkToplevel):
 
         columns = ("date", "number", "level", "file")
         self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [
+        setup_tree_columns(self.tree, [
             ("date", "Дата", 120), ("number", "№ наказу", 130),
             ("level", "Рівень", 180), ("file", "Файл", 200),
-        ]:
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, anchor="w" if col == "file" else "center")
+        ], center_cols=("date", "number", "level"))
         scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -1498,9 +1500,10 @@ class StudentManagementApp(ctk.CTk):
 
         columns = ("num", "id", "full_name", "funding", "note")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [("num", "№ в групі", 70), ("id", "ID", 50), ("full_name", "ПІБ Студента", 300), ("funding", "Фінансування", 110), ("note", "Примітки / Контакти / УБД", 350)]:
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, anchor="center" if col in ("num", "id", "funding") else "w")
+        setup_tree_columns(self.tree, [
+            ("num", "№ в групі", 70), ("id", "ID", 50), ("full_name", "ПІБ Студента", 300),
+            ("funding", "Фінансування", 110), ("note", "Примітки / Контакти / УБД", 350),
+        ], center_cols=("num", "id", "funding"))
 
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -1611,11 +1614,11 @@ class StudentManagementApp(ctk.CTk):
 
         columns = ("num", "name", "grp", "commendation_type", "pts", "status", "action")
         self.rew_tree = ttk.Treeview(rew_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [("num", "№", 40), ("name", "ПІБ Студента з наказу", 220), ("grp", "Група", 80),
-                              ("commendation_type", "Тип", 120), ("pts", "Бали", 55),
-                              ("status", "Найімовірніший варіант | Статус", 280), ("action", "Дія", 90)]:
-            self.rew_tree.heading(col, text=text)
-            self.rew_tree.column(col, width=w, anchor="center" if col in ("num", "pts", "action") else "w")
+        setup_tree_columns(self.rew_tree, [
+            ("num", "№", 40), ("name", "ПІБ Студента з наказу", 220), ("grp", "Група", 80),
+            ("commendation_type", "Тип", 120), ("pts", "Бали", 55),
+            ("status", "Найімовірніший варіант | Статус", 280), ("action", "Дія", 90),
+        ], center_cols=("num", "pts", "action"))
 
         rew_scroll = ttk.Scrollbar(rew_frame, orient="vertical", command=self.rew_tree.yview)
         self.rew_tree.configure(yscrollcommand=rew_scroll.set)
@@ -1639,9 +1642,9 @@ class StudentManagementApp(ctk.CTk):
 
         teacher_columns = ("t_num", "t_name", "t_status", "t_action")
         self.teacher_rew_tree = ttk.Treeview(teacher_frame, columns=teacher_columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [("t_num", "№", 40), ("t_name", "ПІБ Викладача з наказу", 300), ("t_status", "Статус", 340), ("t_action", "Дія", 90)]:
-            self.teacher_rew_tree.heading(col, text=text)
-            self.teacher_rew_tree.column(col, width=w, anchor="center" if col in ("t_num", "t_action") else "w")
+        setup_tree_columns(self.teacher_rew_tree, [
+            ("t_num", "№", 40), ("t_name", "ПІБ Викладача з наказу", 300), ("t_status", "Статус", 340), ("t_action", "Дія", 90),
+        ], center_cols=("t_num", "t_action"))
 
         teacher_scroll = ttk.Scrollbar(teacher_frame, orient="vertical", command=self.teacher_rew_tree.yview)
         self.teacher_rew_tree.configure(yscrollcommand=teacher_scroll.set)
@@ -1671,7 +1674,7 @@ class StudentManagementApp(ctk.CTk):
             reward_data["source_path"] = path
 
             for st in reward_data["students"]:
-                match, score, candidates = matching.find_best_match(st["full_name"], st["group_name"], db_students, threshold)
+                match, score, candidates = matching.find_best_match(st["full_name"], db_students, threshold, candidate_group=st["group_name"])
                 st["matched_id"] = match["id"] if match else None
                 st["matched_group_id"] = match["group_id"] if match else None
                 st["group_name"] = match["group_name"] if match else (st["group_name"] or "Не визначено")
@@ -1683,7 +1686,7 @@ class StudentManagementApp(ctk.CTk):
             if reward_data.get("order_kind") != "reprimand":
                 for teacher in reward_data.get("teachers", []):
 
-                    match, score, candidates = matching.find_best_teacher_match(teacher["full_name"], db_teachers, threshold)
+                    match, score, candidates = matching.find_best_match(teacher["full_name"], db_teachers, threshold)
                     teacher["matched_id"] = match["id"] if match else None
                     teacher["match_score"] = score
                     teacher["candidates"] = candidates
@@ -2058,12 +2061,10 @@ class StudentManagementApp(ctk.CTk):
 
         columns = ("num", "name", "count", "orders")
         self.teacher_rewards_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [
+        setup_tree_columns(self.teacher_rewards_tree, [
             ("num", "№", 40), ("name", "ПІБ викладача", 360),
             ("count", "Кількість подяк", 100), ("orders", "Накази", 420),
-        ]:
-            self.teacher_rewards_tree.heading(col, text=text)
-            self.teacher_rewards_tree.column(col, width=w, anchor="center" if col in ("num", "count") else "w")
+        ], center_cols=("num", "count"))
 
         rt_scroll = ttk.Scrollbar(rt_frame, orient="vertical", command=self.teacher_rewards_tree.yview)
         self.teacher_rewards_tree.configure(yscrollcommand=rt_scroll.set)
@@ -2148,12 +2149,10 @@ class StudentManagementApp(ctk.CTk):
 
         columns = ("place", "name", "grp", "total_pts", "orders")
         self.rating_tree = ttk.Treeview(rt_frame, columns=columns, show="headings", selectmode="browse", style="App.Treeview")
-        for col, text, w in [
+        setup_tree_columns(self.rating_tree, [
             ("place", "Місце", 70), ("name", "ПІБ студента", 260), ("grp", "Група", 90),
             ("total_pts", "Бали", 80), ("orders", "Накази", 420),
-        ]:
-            self.rating_tree.heading(col, text=text)
-            self.rating_tree.column(col, width=w, anchor="center" if col in ("place", "grp", "total_pts") else "w")
+        ], center_cols=("place", "grp", "total_pts"))
 
         rt_scroll = ttk.Scrollbar(rt_frame, orient="vertical", command=self.rating_tree.yview)
         self.rating_tree.configure(yscrollcommand=rt_scroll.set)
