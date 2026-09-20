@@ -1,19 +1,3 @@
-"""
-Співставлення студента з наказу зі студентом у базі даних.
-
-Стара логіка брала перші 4 літери прізвища і шукала їх ЯК ПІДРЯДОК
-у будь-якому імені з тієї ж групи ("кова" збіжиться і з Ковальчук,
-і з Коваленко, і з Ковалів) — це давало помилкові співпадіння без
-жодного попередження користувачу.
-
-Тут натомість використовується коефіцієнт подібності рядків
-(difflib.SequenceMatcher) по повністю нормалізованому ПІБ, з
-перевіркою обох порядків слів (наказ часто пише "Ім'я ПРІЗВИЩЕ",
-а список студентів — "Прізвище Ім'я"). Якщо найкращий збіг нижче
-порогу впевненості — студент позначається як "не визначено" і
-винесений на ручне підтвердження в інтерфейсі, а не мовчки
-пропускається чи прив'язується навмання.
-"""
 
 import difflib
 import re
@@ -24,41 +8,33 @@ def normalize_name(name):
 
 
 def normalize_ukrainian_case(name):
-    """
-    Нормалізує українське ім'я з відмінкового відмінка в називний.
-    Видаляє типові закінчення відмінків для кращого співставлення.
-    """
     if not name:
         return None
-    
-    # Видаляємо типові закінчення відмінків
+
+
     name = re.sub(r"([А-ЯІЇЄҐа-яіїєґ']+?)(у|ові|ю|а|я|ій|ію|єм|є|й|ів|ь)\s+", r"\1 ", name, flags=re.IGNORECASE)
     name = re.sub(r"\s([А-ЯІЇЄҐа-яіїєґ']+?)(у|ові|ю|а|я|ій|ію|єм|є|й|ів|ь)$", r" \1", name, flags=re.IGNORECASE)
-    
-    # Нормалізуємо пробіли та регістр
+
+
     name = re.sub(r"\s+", " ", name.strip())
-    
+
     return name.lower()
 
 
 def normalize_ukrainian_name_advanced(name):
-    """
-    Розширена нормалізація українських імен з відмінкових форм.
-    Працює з обома порядками слів і видаляє закінчення відмінків.
-    """
     if not name:
         return None
-    
-    # Розбиваємо на слова
+
+
     words = name.split()
     normalized_words = []
-    
+
     for word in words:
-        # Видаляємо типові закінчення відмінків
+
         word = re.sub(r"(у|ові|ю|а|я|ій|ію|єм|є|й|ів|ь)$", "", word, flags=re.IGNORECASE)
         normalized_words.append(word)
-    
-    # Нормалізуємо пробіли та регістр
+
+
     normalized = " ".join(normalized_words)
     return re.sub(r"\s+", " ", normalized.strip()).lower()
 
@@ -75,10 +51,6 @@ def _best_ratio(target, candidate_full_name):
 
 
 def _best_ratio_advanced(target, candidate_full_name):
-    """
-    Розширена версія _best_ratio для викладачів.
-    Застосовує розширену нормалізацію відмінкових форм до обох сторін порівняння.
-    """
     cand_norm = normalize_ukrainian_name_advanced(candidate_full_name)
     ratio = difflib.SequenceMatcher(None, target, cand_norm).ratio()
 
@@ -90,14 +62,6 @@ def _best_ratio_advanced(target, candidate_full_name):
 
 
 def find_best_match(candidate_name, candidate_group, students, threshold=0.72):
-    """
-    students: список словників {id, full_name, group_name, group_id}
-    Повертає (студент_або_None, score, список_кандидатів_для_ручного_вибору)
-
-    top_candidates завжди містить принаймні найкращий здогад (навіть якщо
-    він нижче порогу довіри) — щоб інтерфейс міг одразу показати
-    користувачу "ось хто це, ймовірно, є" замість голого "не знайдено".
-    """
     target = normalize_name(candidate_name)
     if not target:
         return None, 0.0, []
@@ -126,13 +90,6 @@ def find_best_match(candidate_name, candidate_group, students, threshold=0.72):
 
 
 def find_best_teacher_match(candidate_name, teachers, threshold=0.72):
-    """
-    teachers: список словників {id, full_name}
-    Повертає (викладач_або_None, score, список_кандидатів_для_ручного_вибору)
-
-    Функція ідентична до find_best_match для студентів, але без групи.
-    Використовує базову нормалізацію для обох сторін порівняння.
-    """
     target = normalize_name(candidate_name)
     if not target:
         return None, 0.0, []

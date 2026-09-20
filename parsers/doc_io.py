@@ -1,4 +1,3 @@
-"""Читання Word-файлів .docx і старих .doc (через MS Word на Windows)."""
 
 import os
 import tempfile
@@ -36,7 +35,6 @@ def convert_doc_to_docx(file_path, prefix="aktiv_plus_"):
 
 
 def open_word_document(file_path):
-    """Повертає (Document, temp_path_або_None). Видаліть temp_path після читання."""
     path = file_path
     temp_path = None
     if file_path.lower().endswith(".doc") and not file_path.lower().endswith(".docx"):

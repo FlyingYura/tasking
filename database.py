@@ -1,23 +1,3 @@
-"""
-Шар доступу до бази даних PostgreSQL.
-
-Головна відмінність від початкової версії: замість того, щоб створювати
-окрему SQL-таблицю на кожну академічну групу (group_ek11, group_or21, ...),
-використовується класична нормалізована схема з чотирьох таблиць:
-
-    groups        — довідник груп
-    students      — усі студенти, з посиланням на групу (group_id)
-    orders        — накази/заходи
-    achievements  — нарахування балів (студент x наказ)
-
-Це усуває потребу в динамічному DDL (CREATE TABLE на кожну групу),
-дозволяє робити нормальні JOIN/GROUP BY одним запитом замість циклу
-по всіх групових таблицях, і не "ламається" при перейменуванні групи.
-
-Для операцій перегляду/редагування довільної таблиці в бічній панелі
-("Середовище БД") дозволені лише таблиці й колонки з явного білого списку —
-це прибирає ризик підстановки довільних імен колонок/таблиць у SQL.
-"""
 
 import json
 import logging
@@ -29,9 +9,7 @@ from psycopg2 import Binary
 
 logger = logging.getLogger("app.database")
 
-# Білий список таблиць і їх редагованих колонок — використовується панеллю
-# "Середовище БД", щоб не підставляти довільні рядки від користувача
-# напряму в SQL-ідентифікатори.
+
 ALLOWED_TABLES = {
     "groups": ["name", "study_year", "curator"],
     "students": ["full_name", "funding", "note"],
@@ -53,7 +31,7 @@ class Database:
         self.conn_params = dict(host=host, port=port, dbname=dbname, user=user, password=password)
         self._conn = None
 
-    # -- підключення -----------------------------------------------------
+
     def connect(self):
         self._conn = psycopg2.connect(connect_timeout=6, **self.conn_params)
         self._conn.autocommit = False
@@ -82,7 +60,7 @@ class Database:
         finally:
             cur.close()
 
-    # -- схема -------------------------------------------------------------
+
     def init_schema(self):
         with self.cursor() as cur:
             cur.execute("""
@@ -126,11 +104,14 @@ class Database:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_students_group ON students(group_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_achievements_student ON achievements(student_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_achievements_order ON achievements(order_id);")
-            # Існуючі бази створювались з INT; дробові бали доган (0.5) потребують NUMERIC.
+
             cur.execute("ALTER TABLE orders ALTER COLUMN default_points TYPE NUMERIC(8,2);")
             cur.execute("ALTER TABLE achievements ALTER COLUMN points_awarded TYPE NUMERIC(8,2);")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_filename TEXT;")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_file BYTEA;")
+
+
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_display TEXT;")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS teachers (
                     id SERIAL PRIMARY KEY,
@@ -147,26 +128,26 @@ class Database:
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_teacher_rewards_teacher ON teacher_rewards(teacher_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_teacher_rewards_order ON teacher_rewards(order_id);")
-            # Міграція для додавання поля commendation_type
-            cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS commendation_type TEXT;")
-            # Міграція для видалення UNIQUE обмеження (якщо існує)
-            try:
-                cur.execute("""
-                    ALTER TABLE achievements 
-                    DROP CONSTRAINT IF EXISTS achievements_student_id_order_id_key;
-                """)
-            except Exception:
-                pass  # Обмеження може не існувати або мати іншу назву
-            # Міграція для видалення UNIQUE обмеження (якщо існує)
-            try:
-                cur.execute("""
-                    ALTER TABLE achievements 
-                    DROP CONSTRAINT IF EXISTS achievements_student_id_order_id_key;
-                """)
-            except Exception:
-                pass  # Обмеження може не існувати або мати іншу назву
 
-    # -- групи / студенти ---------------------------------------------------
+            cur.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS commendation_type TEXT;")
+
+            try:
+                cur.execute("""
+                    ALTER TABLE achievements
+                    DROP CONSTRAINT IF EXISTS achievements_student_id_order_id_key;
+                """)
+            except Exception:
+                pass
+
+            try:
+                cur.execute("""
+                    ALTER TABLE achievements
+                    DROP CONSTRAINT IF EXISTS achievements_student_id_order_id_key;
+                """)
+            except Exception:
+                pass
+
+
     def upsert_group(self, name, study_year, curator):
         with self.cursor() as cur:
             cur.execute("""
@@ -204,7 +185,6 @@ class Database:
             return cur.fetchall()
 
     def get_all_students_flat(self):
-        """Повертає всіх студентів разом із назвою групи — для співставлення з наказами."""
         with self.cursor() as cur:
             cur.execute("""
                 SELECT s.id, s.full_name, g.name, g.id
@@ -217,21 +197,22 @@ class Database:
                 for r in cur.fetchall()
             ]
 
-    # -- накази / нарахування балів -----------------------------------------
-    def upsert_order(self, order_number, order_date, event_title, level_type, points, source_filename=None, source_file=None):
+
+    def upsert_order(self, order_number, order_date, event_title, level_type, points, source_filename=None, source_file=None, points_display=None):
         file_param = Binary(source_file) if source_file else None
         with self.cursor() as cur:
             cur.execute("""
-                INSERT INTO orders (order_number, order_date, event_title, level_type, default_points, source_filename, source_file)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO orders (order_number, order_date, event_title, level_type, default_points, source_filename, source_file, points_display)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (order_number, order_date) DO UPDATE
                 SET event_title = EXCLUDED.event_title,
                     level_type = EXCLUDED.level_type,
                     default_points = EXCLUDED.default_points,
                     source_filename = COALESCE(EXCLUDED.source_filename, orders.source_filename),
-                    source_file = COALESCE(EXCLUDED.source_file, orders.source_file)
+                    source_file = COALESCE(EXCLUDED.source_file, orders.source_file),
+                    points_display = EXCLUDED.points_display
                 RETURNING id;
-            """, (order_number, order_date, event_title, level_type, points, source_filename, file_param))
+            """, (order_number, order_date, event_title, level_type, points, source_filename, file_param, points_display))
             return cur.fetchone()[0]
 
     def add_achievement(self, student_id, order_id, points, commendation_type=None):
@@ -240,21 +221,17 @@ class Database:
                 INSERT INTO achievements (student_id, order_id, points_awarded, commendation_type)
                 VALUES (%s, %s, %s, %s);
             """, (student_id, order_id, points, commendation_type))
-    
+
     def delete_achievements_for_order(self, order_id):
-        """Видаляє всі нарахування для конкретного наказу."""
         with self.cursor() as cur:
             cur.execute("DELETE FROM achievements WHERE order_id = %s;", (order_id,))
-    
+
     def has_achievements_for_order(self, order_id):
-        """Перевіряє, чи є нарахування для конкретного наказу."""
         with self.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM achievements WHERE order_id = %s;", (order_id,))
             return cur.fetchone()[0] > 0
 
     def get_rating(self, group_id=None):
-        """Один запит з JOIN + GROUP BY. Підсумок не опускається нижче 0,
-        але самі догани в нарахуваннях зберігаються зі знаком мінус."""
         with self.cursor() as cur:
             sql = """
                 SELECT s.id, s.full_name, g.name,
@@ -274,7 +251,7 @@ class Database:
                     GROUP BY s.id, s.full_name, g.name
                     ORDER BY total DESC, s.full_name ASC;
                 """)
-            # Включаємо всіх студентів, навіть з 0 балів
+
             result = [
                 {"student_id": r[0], "full_name": r[1], "group_name": r[2], "total": float(r[3] or 0)}
                 for r in cur.fetchall()
@@ -282,7 +259,6 @@ class Database:
             return result
 
     def get_student_totals(self):
-        """Поточний рейтинг кожного студента: {student_id: total}."""
         with self.cursor() as cur:
             cur.execute("""
                 SELECT student_id, COALESCE(SUM(points_awarded), 0)
@@ -301,8 +277,8 @@ class Database:
                 WHERE a.student_id = %s
                 ORDER BY o.order_date DESC, o.id DESC;
             """, (student_id,))
-            
-            # Групуємо результати по наказах
+
+
             grouped = {}
             for r in cur.fetchall():
                 order_id = r[0]
@@ -319,24 +295,24 @@ class Database:
                         "commendation_types": [],
                         "commendation_points": []
                     }
-                
+
                 grouped[order_id]["total_points"] += float(r[5] or 0)
-                if r[8]:  # commendation_type
+                if r[8]:
                     if r[8] not in grouped[order_id]["commendation_types"]:
                         grouped[order_id]["commendation_types"].append(r[8])
                         grouped[order_id]["commendation_points"].append(float(r[5] or 0))
-            
-            # Формуємо результат
+
+
             result = []
             for order_id, data in grouped.items():
-                # Визначаємо тип подяки для відображення
+
                 if len(data["commendation_types"]) > 1:
                     commendation_display = "змішаний"
                 elif len(data["commendation_types"]) == 1:
                     commendation_display = data["commendation_types"][0]
                 else:
                     commendation_display = data["level_type"]
-                
+
                 result.append({
                     "order_id": data["order_id"],
                     "order_number": data["order_number"],
@@ -350,11 +326,10 @@ class Database:
                     "commendation_types": data["commendation_types"],
                     "commendation_points": data["commendation_points"]
                 })
-            
+
             return result
 
     def get_achievement_details(self):
-        """Усі нарахування з реквізитами наказу — для Excel-експорту."""
         with self.cursor() as cur:
             cur.execute("""
                 SELECT s.id, s.full_name, g.name,
@@ -366,11 +341,11 @@ class Database:
                 JOIN orders o ON o.id = a.order_id
                 ORDER BY s.full_name, o.order_date, o.id;
             """)
-            
-            # Групуємо результати по студентам і наказах
+
+
             grouped = {}
             for r in cur.fetchall():
-                key = (r[0], r[3])  # student_id, order_number
+                key = (r[0], r[3])
                 if key not in grouped:
                     grouped[key] = {
                         "student_id": r[0],
@@ -385,24 +360,24 @@ class Database:
                         "commendation_types": [],
                         "commendation_points": []
                     }
-                
+
                 grouped[key]["total_points"] += float(r[7] or 0)
-                if r[9]:  # commendation_type
+                if r[9]:
                     if r[9] not in grouped[key]["commendation_types"]:
                         grouped[key]["commendation_types"].append(r[9])
                         grouped[key]["commendation_points"].append(float(r[7] or 0))
-            
-            # Формуємо результат
+
+
             result = []
             for key, data in grouped.items():
-                # Визначаємо тип подяки для відображення
+
                 if len(data["commendation_types"]) > 1:
                     commendation_display = "змішаний"
                 elif len(data["commendation_types"]) == 1:
                     commendation_display = data["commendation_types"][0]
                 else:
                     commendation_display = data["level_type"]
-                
+
                 result.append({
                     "student_id": data["student_id"],
                     "full_name": data["full_name"],
@@ -417,10 +392,10 @@ class Database:
                     "commendation_types": data["commendation_types"],
                     "commendation_points": data["commendation_points"]
                 })
-            
+
             return result
 
-    # -- викладачі / подяки викладачів ----------------------------------------
+
     def upsert_teacher(self, full_name):
         with self.cursor() as cur:
             cur.execute("""
@@ -449,7 +424,6 @@ class Database:
             """, (teacher_id, order_id))
 
     def get_teacher_rewards(self):
-        """Всі подяки викладачів з реквізитами наказу — для Excel-експорту."""
         with self.cursor() as cur:
             cur.execute("""
                 SELECT t.id, t.full_name,
@@ -472,7 +446,6 @@ class Database:
             ]
 
     def get_teacher_stats(self):
-        """Статистика подяок викладачів: кількість подяк для кожного викладача."""
         with self.cursor() as cur:
             cur.execute("""
                 SELECT t.id, t.full_name, COUNT(tr.order_id) as reward_count
@@ -526,7 +499,7 @@ class Database:
                 return filename, None
             return filename, bytes(blob)
 
-    # -- обслуговування бази -------------------------------------------------
+
     def clear_rewards_and_ratings(self):
         with self.cursor() as cur:
             cur.execute("TRUNCATE TABLE achievements, orders RESTART IDENTITY CASCADE;")
@@ -574,7 +547,7 @@ class Database:
                     ORDER BY t.full_name, o.order_date;
                 """)
             else:
-                cur.execute(f"SELECT * FROM {table_name} ORDER BY id;")  # nosec: table_name whitelisted above
+                cur.execute(f"SELECT * FROM {table_name} ORDER BY id;")
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
             return columns, rows
@@ -584,7 +557,7 @@ class Database:
             raise DatabaseError("Редагування цього поля заборонено.")
         with self.cursor() as cur:
             cur.execute(
-                f"UPDATE {table_name} SET {column_name} = %s WHERE id = %s;",  # nosec: whitelisted above
+                f"UPDATE {table_name} SET {column_name} = %s WHERE id = %s;",
                 (new_value, row_id),
             )
 
@@ -592,10 +565,9 @@ class Database:
         if table_name not in ALLOWED_TABLES:
             raise DatabaseError(f"Таблиця '{table_name}' недоступна.")
         with self.cursor() as cur:
-            cur.execute(f"DELETE FROM {table_name} WHERE id = %s;", (row_id,))  # nosec: whitelisted above
+            cur.execute(f"DELETE FROM {table_name} WHERE id = %s;", (row_id,))
 
     def save_backup(self, file_path):
-        """Зберігає повну копію даних (включно з файлами наказів) у .bak (ZIP)."""
         with self.cursor() as cur:
             cur.execute("SELECT id, name, study_year, curator FROM groups ORDER BY id;")
             groups = [
@@ -608,7 +580,7 @@ class Database:
                 for r in cur.fetchall()
             ]
             cur.execute("""
-                SELECT id, order_number, order_date, event_title, level_type, default_points, source_filename
+                SELECT id, order_number, order_date, event_title, level_type, default_points, source_filename, points_display
                 FROM orders ORDER BY id;
             """)
             orders = [
@@ -620,14 +592,15 @@ class Database:
                     "level_type": r[4],
                     "default_points": float(r[5] or 0),
                     "source_filename": r[6],
+                    "points_display": r[7],
                 }
                 for r in cur.fetchall()
             ]
             cur.execute("SELECT id, source_file FROM orders WHERE source_file IS NOT NULL;")
             files = {r[0]: bytes(r[1]) for r in cur.fetchall()}
-            cur.execute("SELECT id, student_id, order_id, points_awarded FROM achievements ORDER BY id;")
+            cur.execute("SELECT id, student_id, order_id, points_awarded, commendation_type FROM achievements ORDER BY id;")
             achievements = [
-                {"id": r[0], "student_id": r[1], "order_id": r[2], "points_awarded": float(r[3] or 0)}
+                {"id": r[0], "student_id": r[1], "order_id": r[2], "points_awarded": float(r[3] or 0), "commendation_type": r[4]}
                 for r in cur.fetchall()
             ]
             cur.execute("SELECT id, full_name, position FROM teachers ORDER BY id;")
@@ -659,7 +632,6 @@ class Database:
                 zf.writestr(f"files/{order_id}_{safe}", blob)
 
     def restore_backup(self, file_path):
-        """Відновлює дані з .bak, повністю замінюючи поточний вміст таблиць."""
         manifest, file_blobs = read_backup_archive(file_path)
 
         with self.cursor() as cur:
@@ -678,19 +650,19 @@ class Database:
                 blob = file_blobs.get(o["id"])
                 cur.execute(
                     """
-                    INSERT INTO orders (id, order_number, order_date, event_title, level_type, default_points, source_filename, source_file)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                    INSERT INTO orders (id, order_number, order_date, event_title, level_type, default_points, source_filename, source_file, points_display)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                     """,
                     (
                         o["id"], o["order_number"], o["order_date"], o["event_title"],
                         o["level_type"], o["default_points"], o.get("source_filename"),
-                        Binary(blob) if blob else None,
+                        Binary(blob) if blob else None, o.get("points_display"),
                     ),
                 )
             for a in manifest.get("achievements", []):
                 cur.execute(
-                    "INSERT INTO achievements (id, student_id, order_id, points_awarded) VALUES (%s, %s, %s, %s);",
-                    (a["id"], a["student_id"], a["order_id"], a["points_awarded"]),
+                    "INSERT INTO achievements (id, student_id, order_id, points_awarded, commendation_type) VALUES (%s, %s, %s, %s, %s);",
+                    (a["id"], a["student_id"], a["order_id"], a["points_awarded"], a.get("commendation_type")),
                 )
             for t in manifest.get("teachers", []):
                 cur.execute(
@@ -703,17 +675,20 @@ class Database:
                     (tr["id"], tr["teacher_id"], tr["order_id"]),
                 )
             for table in ("groups", "students", "orders", "achievements", "teachers", "teacher_rewards"):
-                cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table};")  # nosec: whitelist
+                cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table};")
                 max_id = cur.fetchone()[0]
                 if max_id:
-                    cur.execute(f"SELECT setval('{table}_id_seq', %s, true);", (max_id,))  # nosec: whitelist
+                    cur.execute(f"SELECT setval('{table}_id_seq', %s, true);", (max_id,))
 
 
 def read_backup_archive(file_path):
     with zipfile.ZipFile(file_path, "r") as zf:
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-        if manifest.get("format") not in (None, "docflow-backup"):
-            raise DatabaseError("Файл не є копією DocFlow.")
+
+
+        valid_formats = (None, "aktiv-plus-backup", "aktivplus-backup", "docflow-backup")
+        if manifest.get("format") not in valid_formats:
+            raise DatabaseError("Файл не є копією бази даних цієї програми.")
         file_blobs = {}
         for name in zf.namelist():
             if name.startswith("files/") and not name.endswith("/"):
@@ -732,7 +707,6 @@ def load_backup_snapshot(file_path):
 
 
 class SnapshotDatabase:
-    """Прочитана з .bak копія: ті самі методи читання, без запису в PostgreSQL."""
 
     read_only = True
 
@@ -742,10 +716,13 @@ class SnapshotDatabase:
         self.students = list(manifest.get("students") or [])
         self.orders = list(manifest.get("orders") or [])
         self.achievements = list(manifest.get("achievements") or [])
+        self.teachers = list(manifest.get("teachers") or [])
+        self.teacher_rewards = list(manifest.get("teacher_rewards") or [])
         self.files = files or {}
         self._groups_by_id = {g["id"]: g for g in self.groups}
         self._students_by_id = {s["id"]: s for s in self.students}
         self._orders_by_id = {o["id"]: o for o in self.orders}
+        self._teachers_by_id = {t["id"]: t for t in self.teachers}
 
     def is_connected(self):
         return True
@@ -766,6 +743,12 @@ class SnapshotDatabase:
         self._readonly()
 
     def add_achievement(self, *args, **kwargs):
+        self._readonly()
+
+    def upsert_teacher(self, *args, **kwargs):
+        self._readonly()
+
+    def add_teacher_reward(self, *args, **kwargs):
         self._readonly()
 
     def update_table_cell(self, *args, **kwargs):
@@ -846,21 +829,54 @@ class SnapshotDatabase:
         return items
 
     def get_achievement_details(self):
-        rows = []
+        grouped = {}
         for a in self.achievements:
             student = self._students_by_id.get(a["student_id"], {})
             group = self._groups_by_id.get(student.get("group_id"), {})
             order = self._orders_by_id.get(a["order_id"], {})
+            key = (a["student_id"], order.get("order_number"))
+            if key not in grouped:
+                grouped[key] = {
+                    "student_id": a["student_id"],
+                    "full_name": student.get("full_name", ""),
+                    "group_name": group.get("name", ""),
+                    "order_number": order.get("order_number"),
+                    "order_date": order.get("order_date"),
+                    "event_title": order.get("event_title") or "—",
+                    "level_type": order.get("level_type"),
+                    "total_points": 0.0,
+                    "source_filename": order.get("source_filename"),
+                    "commendation_types": [],
+                    "commendation_points": [],
+                }
+            pts = float(a.get("points_awarded") or 0)
+            grouped[key]["total_points"] += pts
+            comm_type = a.get("commendation_type")
+            if comm_type and comm_type not in grouped[key]["commendation_types"]:
+                grouped[key]["commendation_types"].append(comm_type)
+                grouped[key]["commendation_points"].append(pts)
+
+        rows = []
+        for data in grouped.values():
+            if len(data["commendation_types"]) > 1:
+                commendation_display = "змішаний"
+            elif len(data["commendation_types"]) == 1:
+                commendation_display = data["commendation_types"][0]
+            else:
+                commendation_display = data["level_type"]
             rows.append({
-                "student_id": a["student_id"],
-                "full_name": student.get("full_name", ""),
-                "group_name": group.get("name", ""),
-                "order_number": order.get("order_number"),
-                "order_date": order.get("order_date"),
-                "event_title": order.get("event_title") or "—",
-                "level_type": order.get("level_type"),
-                "points": float(a.get("points_awarded") or 0),
-                "source_filename": order.get("source_filename"),
+                "student_id": data["student_id"],
+                "full_name": data["full_name"],
+                "group_name": data["group_name"],
+                "order_number": data["order_number"],
+                "order_date": data["order_date"],
+                "event_title": data["event_title"],
+                "level_type": data["level_type"],
+                "points": data["total_points"],
+                "source_filename": data["source_filename"],
+                "commendation_type": commendation_display,
+                "commendation_types": data["commendation_types"],
+                "commendation_points": data["commendation_points"],
             })
         rows.sort(key=lambda r: (r["full_name"], r.get("order_date") or ""))
         return rows
@@ -869,6 +885,57 @@ class SnapshotDatabase:
         order = self._orders_by_id.get(int(order_id), {})
         blob = self.files.get(int(order_id))
         return order.get("source_filename"), blob
+
+
+    def get_all_teachers(self):
+        return sorted(
+            [{"id": t["id"], "full_name": t["full_name"]} for t in self.teachers],
+            key=lambda t: t["full_name"],
+        )
+
+    def get_teacher_rewards(self):
+        rows = []
+        for tr in self.teacher_rewards:
+            teacher = self._teachers_by_id.get(tr["teacher_id"], {})
+            order = self._orders_by_id.get(tr["order_id"], {})
+            rows.append({
+                "teacher_id": tr["teacher_id"],
+                "full_name": teacher.get("full_name", ""),
+                "order_number": order.get("order_number"),
+                "order_date": order.get("order_date"),
+                "level_type": order.get("level_type"),
+                "source_filename": order.get("source_filename"),
+            })
+        rows.sort(key=lambda r: (r["full_name"], r.get("order_date") or ""))
+        return rows
+
+    def get_teacher_stats(self):
+        counts = {}
+        for tr in self.teacher_rewards:
+            counts[tr["teacher_id"]] = counts.get(tr["teacher_id"], 0) + 1
+        rows = [
+            {"teacher_id": t["id"], "full_name": t["full_name"], "reward_count": counts.get(t["id"], 0)}
+            for t in self.teachers
+        ]
+        rows.sort(key=lambda r: (-r["reward_count"], r["full_name"]))
+        return rows
+
+    def get_teacher_history(self, teacher_id):
+        items = []
+        for tr in self.teacher_rewards:
+            if tr["teacher_id"] != teacher_id:
+                continue
+            order = self._orders_by_id.get(tr["order_id"], {})
+            items.append({
+                "order_id": order.get("id", tr["order_id"]),
+                "order_number": order.get("order_number"),
+                "order_date": order.get("order_date"),
+                "level_type": order.get("level_type"),
+                "source_filename": order.get("source_filename"),
+                "has_file": tr["order_id"] in self.files,
+            })
+        items.sort(key=lambda x: (x.get("order_date") or "", x.get("order_id") or 0), reverse=True)
+        return items
 
     def get_all_db_tables(self):
         return list(ALLOWED_TABLES.keys())
@@ -893,6 +960,12 @@ class SnapshotDatabase:
                 (o["id"], o["order_number"], o["order_date"], o["level_type"], o.get("default_points"), o.get("source_filename") or "—")
                 for o in self.orders
             ]
+        elif table_name == "teachers":
+            columns = ["id", "full_name"]
+            rows = [(t["id"], t["full_name"]) for t in self.teachers]
+        elif table_name == "teacher_rewards":
+            columns = ["id", "teacher_id", "order_id"]
+            rows = [(tr["id"], tr["teacher_id"], tr["order_id"]) for tr in self.teacher_rewards]
         else:
             columns = ["id", "student_id", "order_id", "points_awarded"]
             rows = [(a["id"], a["student_id"], a["order_id"], a.get("points_awarded")) for a in self.achievements]

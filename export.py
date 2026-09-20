@@ -1,7 +1,3 @@
-"""
-Експорт даних у файли .xlsx, щоб звіт можна було одразу відкрити в Excel,
-відформатувати чи роздрукувати для директора.
-"""
 
 import re
 from collections import OrderedDict, defaultdict
@@ -17,7 +13,6 @@ _UKR_LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщью
 
 
 def name_sort_key(name):
-    """Алфавітний ключ з урахуванням української «і/ї/є/ґ», а не коду Unicode."""
     keys = []
     for ch in (name or "").casefold():
         pos = _UKR_LETTERS.find(ch)
@@ -232,7 +227,6 @@ def export_group_to_xlsx(group_name, study_year, curator, students_rows, file_pa
 
 
 def export_teacher_rewards_to_xlsx(stats_rows, file_path, detail_rows=None):
-    """Експорт подяок викладачів у Excel."""
     rows = _attach_teacher_details(stats_rows, detail_rows)
     wb = Workbook()
     used = set()
